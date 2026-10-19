@@ -113,8 +113,20 @@ async function stageAll(ws, path) {
   await git(path, "rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", ".argue", ...ws.shared);
 }
 
+/** git's worktree bookkeeping is not safe under concurrent add/remove (notably on Windows): serialize. */
+let worktreeLock = Promise.resolve();
+function serial(fn) {
+  const next = worktreeLock.then(fn, fn);
+  worktreeLock = next.catch(() => {});
+  return next;
+}
+
 /** Create an isolated worktree at the workspace snapshot. Returns its starting commit. */
-export async function addWorktree(ws, path) {
+export function addWorktree(ws, path) {
+  return serial(() => addWorktreeNow(ws, path));
+}
+
+async function addWorktreeNow(ws, path) {
   mkdirSync(dirname(path), { recursive: true });
   await git(ws.root, "worktree", "add", "-q", "--detach", path, ws.base);
   for (const file of ws.untracked) {
@@ -145,9 +157,11 @@ export async function resetWorktree(ws, path, start) {
   await git(path, "clean", "-fdq", ...ws.shared.flatMap((d) => ["-e", `/${d}`]));
 }
 
-export async function removeWorktree(ws, path) {
-  await run("git", ["worktree", "remove", "--force", path], { cwd: ws.root });
-  await run("git", ["worktree", "prune"], { cwd: ws.root });
+export function removeWorktree(ws, path) {
+  return serial(async () => {
+    await run("git", ["worktree", "remove", "--force", path], { cwd: ws.root });
+    await run("git", ["worktree", "prune"], { cwd: ws.root });
+  });
 }
 
 /** Everything changed in a worktree since `start` (new, deleted, binary files included). */
