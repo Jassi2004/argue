@@ -70,7 +70,7 @@ async function argueInner(opts) {
   const dropTree = async (path) => {
     if (keep) return;
     await removeWorktree(ws, path);
-    rmSync(path, { recursive: true, force: true });
+    rmQuiet(path);
     const i = worktrees.indexOf(path);
     if (i >= 0) worktrees.splice(i, 1);
   };
@@ -300,7 +300,8 @@ async function argueInner(opts) {
     writeFileSync(join(runDir, "transcript.json"), JSON.stringify(transcript, null, 2));
     emit({ type: "done", result });
     return result;
-  } catch (err) {
+  } catch (caught) {
+    const err = signal?.aborted ? Object.assign(new Error("cancelled"), { cause: caught }) : caught;
     const failure = { runId, status: "failed", error: err.message, costUsd: round4(ledger.costUsd), tokens: ledger.tokens, runDir };
     writeFileSync(join(runDir, "result.json"), JSON.stringify(failure, null, 2));
     writeFileSync(join(runDir, "transcript.json"), JSON.stringify(transcript, null, 2));
@@ -317,7 +318,7 @@ async function argueInner(opts) {
         for (const path of [...worktrees]) await dropTree(path).catch(() => {});
         await run("git", ["worktree", "prune"], { cwd: ws.root });
       });
-      rmSync(scratch, { recursive: true, force: true });
+      rmQuiet(scratch);
     } else {
       emit({ type: "note", text: `worktrees kept in ${scratch}` });
     }
@@ -333,6 +334,13 @@ export function modifiedTests(diff = "") {
     if (/(^|[\/._-])(tests?|specs?|__tests__)([\/._-]|$)/i.test(file)) out.push(file);
   }
   return out;
+}
+
+/** Best-effort delete (Windows can keep files locked briefly after a process is killed). */
+function rmQuiet(path) {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {}
 }
 
 function round4(n) {
