@@ -1,7 +1,7 @@
 {
   "name": "argue-ai",
   "version": "0.1.0",
-  "description": "Make AI coding agents argue over your task until the best solution wins.",
+  "description": "Make AI coding agents (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) argue over your task until the best solution wins.",
   "type": "module",
   "bin": {
     "argue": "bin/argue.js"
@@ -9,10 +9,12 @@
   "files": [
     "bin",
     "src",
-    "skills"
+    "skills",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/unit.test.js test/integration.test.js"
   },
   "engines": {
     "node": ">=20"
@@ -20,10 +22,25 @@
   "keywords": [
     "ai",
     "agents",
+    "coding-agent",
     "claude-code",
     "codex",
+    "gemini-cli",
+    "cursor",
+    "opencode",
+    "pi",
+    "mcp",
+    "multi-agent",
     "debate",
+    "code-review",
     "cli"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jassi2004/argue.git"
+  },
+  "homepage": "https://github.com/Jassi2004/argue#readme",
+  "bugs": "https://github.com/Jassi2004/argue/issues",
+  "author": "Jaskirat Singh"
 }
