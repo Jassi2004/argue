@@ -115,6 +115,12 @@ export async function addWorktree(ws, path) {
   return git(path, "rev-parse", "HEAD");
 }
 
+/** Reset a worktree back to `start`, keeping the symlinked shared folders. */
+export async function resetWorktree(ws, path, start) {
+  await git(path, "reset", "-q", "--hard", start);
+  await git(path, "clean", "-fdq", ...ws.shared.flatMap((d) => ["-e", `/${d}`]));
+}
+
 export async function removeWorktree(ws, path) {
   await run("git", ["worktree", "remove", "--force", path], { cwd: ws.root });
   await run("git", ["worktree", "prune"], { cwd: ws.root });

@@ -4,7 +4,8 @@ const RULES = `You are one of several independent AI agents competing on the sam
 Ground rules:
 - Correctness beats cleverness. Verify claims by reading the code and running commands where you can.
 - Never ask the user questions; make reasonable assumptions and state them.
-- Do not touch the .argue/ folder except to read files you are pointed to.`;
+- Work only inside the current directory. Put any scratch files (repro scripts, notes) here, never in /tmp or elsewhere.
+- Do not modify the .argue/ folder; only read files in it that you are pointed to.`;
 
 const checkLine = (check) => (check ? `Acceptance check (run automatically in your copy afterwards): \`${check}\`\n` : "");
 
@@ -39,7 +40,7 @@ ${checkLine(check)}
 You are ${self}. You are now a reviewer. Rival solutions:
 ${list}
 
-You are in a scratch copy of the original (unmodified) repository. You may apply a rival patch here (\`git apply <patch>\` or \`patch -p1 < <patch>\`), run tests, and write repro scripts or failing tests to PROVE problems. Reset between rivals with \`git checkout -- . && git clean -fdq -e .argue\`. Nothing you do here is kept.
+You are in a scratch copy of the original (unmodified) repository. You may apply a rival patch here (\`git apply <patch>\`), run tests, and write repro scripts or failing tests to PROVE problems. Undo it with \`git apply -R <patch>\` before trying the next rival, and delete your scratch files. Nothing you do here is kept.
 
 Find real problems: bugs, missed requirements, broken edge cases, regressions, security issues. Ignore style nitpicks.
 A claim backed by a failing test or command output counts far more than an opinion. Do not invent problems; if a solution is solid, say so.

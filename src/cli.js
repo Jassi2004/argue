@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { defaultJudge, defaultLineup, detect, parseAgents, registry } from "./agents.js";
 import { argue } from "./argue.js";
-import { startDetached } from "./background.js";
+import { startDetached, waitForFinish, waitForRun } from "./background.js";
 import { detectCheck, loadConfig, userConfigPath, writeConfig } from "./config.js";
 import { killAll } from "./exec.js";
 import { applyPatch, hasGit } from "./git.js";
@@ -22,6 +22,8 @@ ${bold("Usage")}
   argue show [run]                 print a run's report
   argue runs                       list runs in this project
   argue watch [run]                follow a running run's progress
+  argue wait [run] [-t secs]       wait up to N seconds (default 240), print status JSON (for agents)
+  argue cancel [run]               stop a running run
   argue doctor                     check which agent CLIs are installed
   argue init                       set default agents for your machine
   argue install [targets…]         add /argue to your agents (skill + MCP); targets:
@@ -73,7 +75,7 @@ const OPTIONS = {
   help: { type: "boolean", short: "h" },
 };
 
-const COMMANDS = new Set(["apply", "show", "runs", "watch", "doctor", "init", "install", "uninstall", "mcp", "help", "version"]);
+const COMMANDS = new Set(["apply", "show", "runs", "watch", "wait", "cancel", "doctor", "init", "install", "uninstall", "mcp", "help", "version"]);
 
 export async function main(argv) {
   const { values: o, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true });
@@ -91,6 +93,8 @@ export async function main(argv) {
   if (cmd === "runs") return runsCmd(cwd, o);
   if (cmd === "show") return show(cwd, rest[0], o);
   if (cmd === "watch") return watch(cwd, rest[0]);
+  if (cmd === "wait") return waitCmd(cwd, rest[0], o);
+  if (cmd === "cancel") return cancelCmd(cwd, rest[0]);
   if (cmd === "apply") return applyCmd(cwd, rest[0], o);
   return runTask(cwd, rest, o, argv);
 }
@@ -130,8 +134,13 @@ async function runTask(cwd, rest, o, argv) {
   const timeout = num(o.timeout ?? config.timeout, "timeout", 1, 600);
 
   if (o.bg) {
-    const args = argv.filter((a) => a !== "--bg");
+    const args = argv.filter((a) => a !== "--bg" && a !== "--json");
     const { runId, log } = startDetached({ cwd, args });
+    if (o.json) {
+      const run = await waitForRun(cwd, runId);
+      if (!run) throw new Error(`run failed to start; see ${log}`);
+      return console.log(JSON.stringify({ run_id: runId, status: "running", agents: run.meta.agents, judge: run.meta.judge, next: `argue wait ${runId}` }, null, 2));
+    }
     console.log(`${green("started")} ${runId}\n  ${dim("follow:")}  argue watch ${runId}\n  ${dim("apply:")}   argue apply ${runId}\n  ${dim("log:")}     ${log}`);
     return;
   }
@@ -275,6 +284,19 @@ async function watch(cwd, id) {
   }
   if (run.status === "done") printResult(run.result);
   else console.log(red(`run ${run.status}: ${run.result?.error ?? ""}`));
+}
+
+async function waitCmd(cwd, id, o) {
+  const run = await findRun(cwd, id);
+  const seconds = o.timeout ? num(o.timeout, "timeout", 1, 3600) : 240;
+  console.log(JSON.stringify(summarize(await waitForFinish(cwd, run.id, seconds)), null, 2));
+}
+
+async function cancelCmd(cwd, id) {
+  const run = await findRun(cwd, id);
+  if (run.status !== "running") return console.log(`run ${run.id} is ${run.status}`);
+  process.kill(run.meta.pid, "SIGTERM");
+  console.log(`cancelling ${run.id}`);
 }
 
 async function applyCmd(cwd, id, o) {

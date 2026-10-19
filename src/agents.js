@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { jsonLines, lastJsonObject, oneLine, run, shell, tail, which } from "./exec.js";
 
 /**
@@ -13,7 +13,7 @@ import { jsonLines, lastJsonObject, oneLine, run, shell, tail, which } from "./e
  * `write: false` = read-only (critique / judge / plan).
  * `promptFile` is a copy of `prompt` on disk inside `cwd`, for CLIs that are easier to drive with a short argument.
  */
-const POINTER = (file) => `Read the file ${file} and follow the instructions in it exactly. Reply only with what it asks for.`;
+const POINTER = (file, cwd) => `Read the file ${relative(cwd, file).split("\\").join("/")} (in the current directory) and follow the instructions in it exactly. Reply only with what it asks for.`;
 
 export const DRIVERS = {
   claude: {
@@ -21,7 +21,7 @@ export const DRIVERS = {
     bin: "claude",
     install: "npm i -g @anthropic-ai/claude-code",
     async ask({ model, effort, prompt, cwd, write, timeoutMs, budgetUsd }) {
-      const args = ["-p", "--output-format", "json"];
+      const args = ["-p", "--output-format", "json", "--no-session-persistence"];
       args.push(...(write ? ["--permission-mode", "acceptEdits", "--allowedTools", "Read,Edit,Write,MultiEdit,Glob,Grep,Bash,TodoWrite"] : ["--permission-mode", "dontAsk", "--allowedTools", "Read,Glob,Grep"]));
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
@@ -40,7 +40,7 @@ export const DRIVERS = {
     async ask({ model, effort, prompt, cwd, write, timeoutMs }) {
       const dir = mkdtempSync(join(tmpdir(), "argue-codex-"));
       const out = join(dir, "last.txt");
-      const args = ["exec", "--json", "--skip-git-repo-check", "-s", write ? "workspace-write" : "read-only", "-C", cwd, "-o", out];
+      const args = ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", write ? "workspace-write" : "read-only", "-C", cwd, "-o", out];
       if (model) args.push("-m", model);
       if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
       args.push("-");
@@ -66,7 +66,7 @@ export const DRIVERS = {
     bin: "gemini",
     install: "npm i -g @google/gemini-cli",
     async ask({ model, promptFile, cwd, write, timeoutMs }) {
-      const args = ["-p", POINTER(promptFile), "-o", "json", "--skip-trust", "--approval-mode", write ? "yolo" : "default"];
+      const args = ["-p", POINTER(promptFile, cwd), "-o", "json", "--skip-trust", "--approval-mode", write ? "yolo" : "default"];
       if (model) args.push("-m", model);
       const res = await run("gemini", args, { cwd, timeoutMs });
       const json = lastJsonObject(res.stdout);
@@ -86,7 +86,7 @@ export const DRIVERS = {
       const args = ["-p", "--output-format", "json", "--trust", "--workspace", cwd];
       args.push(...(write ? ["--force"] : ["--mode", "ask"]));
       if (model) args.push("--model", model);
-      args.push(POINTER(promptFile));
+      args.push(POINTER(promptFile, cwd));
       const res = await run(bin, args, { cwd, timeoutMs });
       const json = lastJsonObject(res.stdout);
       if (!json || json.is_error || typeof json.result !== "string") return fail(res);
@@ -102,7 +102,7 @@ export const DRIVERS = {
       const args = ["run", "--format", "json", "--dir", cwd];
       if (!write) args.push("--agent", "plan");
       if (model) args.push("-m", model);
-      args.push(POINTER(promptFile));
+      args.push(POINTER(promptFile, cwd));
       const res = await run("opencode", args, { cwd, timeoutMs });
       let text = "";
       let costUsd = 0;

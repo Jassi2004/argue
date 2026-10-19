@@ -10,6 +10,8 @@ const SKILL = readFileSync(join(ROOT, "skills", "argue", "SKILL.md"), "utf8");
 /** Command used by hosts to launch the MCP server. Prefer `argue` on PATH so upgrades keep working. */
 async function mcpCommand() {
   if (await which("argue")) return { command: "argue", args: ["mcp"] };
+  // Running from an npx cache (temporary): register an npx command that always resolves.
+  if (/[\\/]_npx[\\/]/.test(ROOT)) return { command: "npx", args: ["-y", "argue-ai", "mcp"] };
   return { command: process.execPath, args: [join(ROOT, "bin", "argue.js"), "mcp"] };
 }
 
