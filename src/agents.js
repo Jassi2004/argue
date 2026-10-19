@@ -269,7 +269,6 @@ export function defaultLineup(installed) {
   return "";
 }
 
-
 /**
  * Judge preference: a strong CLI that is not competing (neutral), else a strong competitor's CLI
  * (it cannot tell which anonymous candidate is its own), else the first competitor exactly as specified.

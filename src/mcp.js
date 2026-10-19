@@ -18,6 +18,7 @@ import { VERSION } from "./version.js";
 const TOOLS = [
   {
     name: "argue_start",
+    annotations: { title: "Start argue run", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       "Start an argue run: several AI coding agents (e.g. Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) independently solve the same task in isolated copies of the repo, critique each other with evidence, revise, and a judge picks the best verified solution. Use for hard or high-stakes tasks, or when the user says 'argue'. Returns a run_id immediately; then call argue_wait repeatedly until status is done. Does not modify the user's files unless apply=true.",
     inputSchema: {
@@ -51,6 +52,7 @@ const TOOLS = [
   },
   {
     name: "argue_wait",
+    annotations: { title: "Wait for argue run", readOnlyHint: true, openWorldHint: false },
     description:
       "Wait for an argue run (up to `seconds`, default 50) and return its progress, or the final result once done. Call repeatedly until status is 'done' or 'failed'. Show the user brief progress between calls.",
     inputSchema: {
@@ -61,6 +63,7 @@ const TOOLS = [
   },
   {
     name: "argue_apply",
+    annotations: { title: "Apply argue result", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     description: "Apply a finished run's winning patch (or a specific agent's patch) to the project working tree.",
     inputSchema: {
       type: "object",
@@ -74,16 +77,19 @@ const TOOLS = [
   },
   {
     name: "argue_cancel",
+    annotations: { title: "Cancel argue run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: "Cancel a running argue run.",
     inputSchema: { type: "object", properties: { run_id: { type: "string" }, cwd: { type: "string" } }, required: ["run_id", "cwd"] },
   },
   {
     name: "argue_runs",
+    annotations: { title: "List argue runs", readOnlyHint: true, openWorldHint: false },
     description: "List recent argue runs in a project.",
     inputSchema: { type: "object", properties: { cwd: { type: "string" } }, required: ["cwd"] },
   },
   {
     name: "argue_agents",
+    annotations: { title: "List argue agents", readOnlyHint: true, openWorldHint: false },
     description: "List which coding-agent CLIs are installed and usable as argue participants.",
     inputSchema: { type: "object", properties: { cwd: { type: "string" } } },
   },

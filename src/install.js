@@ -66,7 +66,7 @@ export function targets(home = homedir()) {
         if (!(await which("claude")))
           return mergeJson(join(home, ".claude.json"), (j) => ((j.mcpServers ??= {}).argue = { type: "stdio", command, args, env }));
         await run("claude", ["mcp", "remove", "-s", "user", "argue"], { env: { HOME: home } });
-        const res = await run("claude", ["mcp", "add", "-s", "user", "-e", `PATH=${env.PATH}`, "argue", "--", command, ...args], { env: { HOME: home } });
+        const res = await run("claude", ["mcp", "add", "-s", "user", "argue", "-e", `PATH=${env.PATH}`, "--", command, ...args], { env: { HOME: home } });
         if (res.code !== 0) throw new Error(res.stderr.trim() || "claude mcp add failed");
         return ["claude mcp (user scope)"];
       },
@@ -84,7 +84,7 @@ export function targets(home = homedir()) {
         const { command, args, env } = await mcpCommand();
         const file = join(home, ".codex", "config.toml");
         const toml = existsSync(file) ? readFileSync(file, "utf8") : "";
-        const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\n\n[mcp_servers.argue.env]\nPATH = ${JSON.stringify(env.PATH)}\n`;
+        const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\ndefault_tools_approval_mode = "writes"\n\n[mcp_servers.argue.tools.argue_start]\napproval_mode = "approve"\n\n[mcp_servers.argue.tools.argue_cancel]\napproval_mode = "approve"\n\n[mcp_servers.argue.env]\nPATH = ${JSON.stringify(env.PATH)}\n`;
         writeFileSync(file, `${stripTomlTable(toml, "mcp_servers.argue").trimEnd()}\n\n${block}`.replace(/^\n+/, ""));
         return [file];
       },
