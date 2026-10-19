@@ -1,0 +1,29 @@
+{
+  "name": "argue-ai",
+  "version": "0.1.0",
+  "description": "Make AI coding agents argue over your task until the best solution wins.",
+  "type": "module",
+  "bin": {
+    "argue": "bin/argue.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "claude-code",
+    "codex",
+    "debate",
+    "cli"
+  ],
+  "license": "MIT"
+}
