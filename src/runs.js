@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { run } from "./exec.js";
 
@@ -62,4 +62,26 @@ function alive(pid) {
   } catch (err) {
     return err.code === "EPERM";
   }
+}
+
+/**
+ * Ask a run to stop. Works on every OS: the run polls for this file and cancels itself
+ * (stopping its agents and cleaning up). Falls back to a signal after a grace period.
+ */
+export async function requestCancel(run, graceMs = 15000) {
+  writeFileSync(join(run.path, "cancel"), String(Date.now()));
+  if (process.platform !== "win32") {
+    try {
+      process.kill(run.meta.pid, "SIGTERM");
+    } catch {}
+  }
+  const end = Date.now() + graceMs;
+  while (Date.now() < end) {
+    if (!alive(run.meta.pid)) return true;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  try {
+    process.kill(run.meta.pid, "SIGKILL");
+  } catch {}
+  return false;
 }

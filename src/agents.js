@@ -13,7 +13,8 @@ import { jsonLines, lastJsonObject, oneLine, run, shell, tail, which } from "./e
  * `write: false` = read-only (critique / judge / plan).
  * `promptFile` is a copy of `prompt` on disk inside `cwd`, for CLIs that are easier to drive with a short argument.
  */
-const POINTER = (file, cwd) => `Read the file ${relative(cwd, file).split("\\").join("/")} (in the current directory) and follow the instructions in it exactly. Reply only with what it asks for.`;
+const POINTER = (file, cwd) =>
+  `Read the file ${relative(cwd, file).split("\\").join("/")} (in the current directory) and follow the instructions in it exactly. Reply only with what it asks for.`;
 
 export const DRIVERS = {
   claude: {
@@ -22,14 +23,24 @@ export const DRIVERS = {
     install: "npm i -g @anthropic-ai/claude-code",
     async ask({ model, effort, prompt, cwd, write, timeoutMs, budgetUsd }) {
       const args = ["-p", "--output-format", "json", "--no-session-persistence"];
-      args.push(...(write ? ["--permission-mode", "acceptEdits", "--allowedTools", "Read,Edit,Write,MultiEdit,Glob,Grep,Bash,TodoWrite"] : ["--permission-mode", "dontAsk", "--allowedTools", "Read,Glob,Grep"]));
+      args.push(
+        ...(write
+          ? ["--permission-mode", "acceptEdits", "--allowedTools", "Read,Edit,Write,MultiEdit,Glob,Grep,Bash,TodoWrite"]
+          : ["--permission-mode", "dontAsk", "--allowedTools", "Read,Glob,Grep"]),
+      );
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
       if (budgetUsd > 0) args.push("--max-budget-usd", budgetUsd.toFixed(2));
       const res = await run("claude", args, { cwd, input: prompt, timeoutMs });
       const json = lastJsonObject(res.stdout);
       if (!json || json.type !== "result") return fail(res);
-      return { ok: !json.is_error, text: json.result ?? "", costUsd: json.total_cost_usd ?? 0, tokens: sumTokens(json.usage), error: json.is_error ? oneLine(json.result || json.subtype, 300) : undefined };
+      return {
+        ok: !json.is_error,
+        text: json.result ?? "",
+        costUsd: json.total_cost_usd ?? 0,
+        tokens: sumTokens(json.usage),
+        error: json.is_error ? oneLine(json.result || json.subtype, 300) : undefined,
+      };
     },
   },
 
@@ -139,7 +150,11 @@ export const DRIVERS = {
         const m = ev.message;
         costUsd += m.usage?.cost?.total ?? 0;
         tokens += m.usage?.totalTokens ?? 0;
-        const t = (m.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("\n").trim();
+        const t = (m.content ?? [])
+          .filter((c) => c.type === "text")
+          .map((c) => c.text)
+          .join("\n")
+          .trim();
         if (t) text = t;
         if (m.stopReason === "error") error = m.errorMessage ?? "model error";
       }
@@ -162,7 +177,10 @@ export function customDriver(name, def) {
     async ask({ model, promptFile, cwd, write, timeoutMs }) {
       const template = (!write && def.readCommand) || def.command;
       if (!template) return { ok: false, text: "", costUsd: 0, tokens: 0, error: `custom agent "${name}" has no command` };
-      const line = template.replaceAll("{prompt_file}", quote(promptFile)).replaceAll("{cwd}", quote(cwd)).replaceAll("{model}", model ?? "");
+      const line = template
+        .replaceAll("{prompt_file}", quote(promptFile))
+        .replaceAll("{cwd}", quote(cwd))
+        .replaceAll("{model}", model ?? "");
       const [cmd, args] = shell(line);
       const res = await run(cmd, args, { cwd, timeoutMs, env: { ARGUE_WRITE: write ? "1" : "0", ARGUE_PROMPT_FILE: promptFile } });
       if (res.code !== 0) return fail(res);
@@ -185,7 +203,13 @@ function fail(res, hint) {
   if (!error) {
     if (res.timedOut) error = "timed out";
     else if (res.code === -1 && /ENOENT/.test(res.stderr)) error = "CLI not found";
-    else error = tail((res.stderr || res.stdout).trim(), 600).split("\n").filter(Boolean).slice(-4).join(" | ") || `exit code ${res.code}`;
+    else
+      error =
+        tail((res.stderr || res.stdout).trim(), 600)
+          .split("\n")
+          .filter(Boolean)
+          .slice(-4)
+          .join(" | ") || `exit code ${res.code}`;
   }
   return { ok: false, text: "", costUsd: 0, tokens: 0, error: oneLine(error, 400) };
 }
@@ -214,9 +238,7 @@ export async function detect(drivers = DRIVERS) {
 
 /** Parse "claude:opus@high,codex,claude:sonnet" -> agent specs. */
 export function parseAgents(list, drivers = DRIVERS) {
-  const specs = (Array.isArray(list) ? list : String(list).split(","))
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const specs = (Array.isArray(list) ? list : String(list).split(",")).map((s) => s.trim()).filter(Boolean);
   return specs.map((spec) => {
     const at = spec.lastIndexOf("@");
     const main = at > 0 ? spec.slice(0, at) : spec;

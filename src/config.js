@@ -18,7 +18,8 @@ export const DEFAULTS = {
 };
 
 export function userConfigPath() {
-  const base = process.env.XDG_CONFIG_HOME || (process.platform === "win32" ? process.env.APPDATA || join(homedir(), "AppData", "Roaming") : join(homedir(), ".config"));
+  const base =
+    process.env.XDG_CONFIG_HOME || (process.platform === "win32" ? process.env.APPDATA || join(homedir(), "AppData", "Roaming") : join(homedir(), ".config"));
   return join(base, "argue", "config.json");
 }
 
@@ -58,7 +59,12 @@ export function detectCheck(dir) {
   if (has("Cargo.toml")) return "cargo test --quiet";
   if (has("go.mod")) return "go test ./...";
   const py = onPath("python") && !onPath("python3") ? "python" : onPath("python3") ? "python3" : "python";
-  if (has("pytest.ini") || has("conftest.py") || /pytest/.test(safeRead(join(dir, "pyproject.toml")) + safeRead(join(dir, "setup.cfg")) + safeRead(join(dir, "tox.ini")))) return `${py} -m pytest -q`;
+  if (
+    has("pytest.ini") ||
+    has("conftest.py") ||
+    /pytest/.test(safeRead(join(dir, "pyproject.toml")) + safeRead(join(dir, "setup.cfg")) + safeRead(join(dir, "tox.ini")))
+  )
+    return `${py} -m pytest -q`;
   if (has("pyproject.toml") || has("setup.py")) {
     try {
       if (readdirSync(dir).some((f) => /^test_.*\.py$|_test\.py$/.test(f)) || has("tests")) return `${py} -m pytest -q`;

@@ -48,7 +48,10 @@ export function targets(home = homedir()) {
         }
         return done;
       },
-      uninstall: () => Object.values(skillDirs).filter((d) => existsSync(d)).map((d) => (rmSync(d, { recursive: true, force: true }), d)),
+      uninstall: () =>
+        Object.values(skillDirs)
+          .filter((d) => existsSync(d))
+          .map((d) => (rmSync(d, { recursive: true, force: true }), d)),
     },
     {
       id: "claude",
@@ -56,7 +59,8 @@ export function targets(home = homedir()) {
       present: () => existsSync(join(home, ".claude")) || existsSync(join(home, ".claude.json")),
       install: async () => {
         const { command, args } = await mcpCommand();
-        if (!(await which("claude"))) return mergeJson(join(home, ".claude.json"), (j) => ((j.mcpServers ??= {}).argue = { type: "stdio", command, args, env: {} }));
+        if (!(await which("claude")))
+          return mergeJson(join(home, ".claude.json"), (j) => ((j.mcpServers ??= {}).argue = { type: "stdio", command, args, env: {} }));
         await run("claude", ["mcp", "remove", "-s", "user", "argue"], { env: { HOME: home } });
         const res = await run("claude", ["mcp", "add", "-s", "user", "argue", "--", command, ...args], { env: { HOME: home } });
         if (res.code !== 0) throw new Error(res.stderr.trim() || "claude mcp add failed");
@@ -102,10 +106,16 @@ export function targets(home = homedir()) {
       present: () => existsSync(join(home, ".gemini")),
       install: async () => {
         const { command, args } = await mcpCommand();
-        const files = mergeJson(join(home, ".gemini", "settings.json"), (j) => ((j.mcpServers ??= {}).argue = { command, args, timeout: 600000, trust: false }));
+        const files = mergeJson(
+          join(home, ".gemini", "settings.json"),
+          (j) => ((j.mcpServers ??= {}).argue = { command, args, timeout: 600000, trust: false }),
+        );
         const cmd = join(home, ".gemini", "commands", "argue.toml");
         mkdirSync(dirname(cmd), { recursive: true });
-        writeFileSync(cmd, `description = "Run a task through multiple competing AI agents (argue)"\nprompt = """\n${SLASH_PROMPT.replace("$ARGS", "{{args}}")}\n"""\n`);
+        writeFileSync(
+          cmd,
+          `description = "Run a task through multiple competing AI agents (argue)"\nprompt = """\n${SLASH_PROMPT.replace("$ARGS", "{{args}}")}\n"""\n`,
+        );
         return [...files, cmd];
       },
       uninstall: () => {
@@ -119,7 +129,10 @@ export function targets(home = homedir()) {
       present: () => existsSync(join(cfg, "opencode")),
       install: async () => {
         const { command, args } = await mcpCommand();
-        const files = mergeJson(join(cfg, "opencode", "opencode.json"), (j) => ((j.mcp ??= {}).argue = { type: "local", command: [command, ...args], enabled: true }));
+        const files = mergeJson(
+          join(cfg, "opencode", "opencode.json"),
+          (j) => ((j.mcp ??= {}).argue = { type: "local", command: [command, ...args], enabled: true }),
+        );
         const cmd = join(cfg, "opencode", "commands", "argue.md");
         mkdirSync(dirname(cmd), { recursive: true });
         writeFileSync(cmd, `---\ndescription: Run a task through multiple competing AI agents (argue)\n---\n${SLASH_PROMPT.replace("$ARGS", "$ARGUMENTS")}\n`);
