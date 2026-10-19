@@ -231,7 +231,9 @@ test("install writes every integration into a fake home and uninstall removes th
     assert.ok(existsSync(join(home, ".pi", "agent", "prompts", "argue.md")));
     // idempotent
     await install({ home, only: ["codex"] });
-    assert.equal(readFileSync(join(home, ".codex", "config.toml"), "utf8").match(/\[mcp_servers\.argue\]/g).length, 1);
+    const toml = readFileSync(join(home, ".codex", "config.toml"), "utf8");
+    assert.equal(toml.match(/\[mcp_servers\.argue\]/g).length, 1);
+    assert.match(toml, /\[mcp_servers\.argue\.tools\.argue_start\]\napproval_mode = "approve"/);
 
     await install({ home, only: ["skill", "codex", "cursor", "gemini", "opencode", "pi"], uninstall: true });
     assert.ok(!existsSync(join(home, ".agents", "skills", "argue")));
