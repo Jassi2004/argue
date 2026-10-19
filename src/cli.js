@@ -9,7 +9,7 @@ import { killAll } from "./exec.js";
 import { applyPatch, hasGit } from "./git.js";
 import { install } from "./install.js";
 import { startMcpServer, summarize } from "./mcp.js";
-import { findRun, listRuns, readEvents } from "./runs.js";
+import { findRun, listRuns, readEvents, requestCancel } from "./runs.js";
 import { bold, cyan, dim, green, printResult, progressPrinter, red, yellow } from "./ui.js";
 import { VERSION } from "./version.js";
 
@@ -115,7 +115,10 @@ async function runTask(cwd, rest, o, argv) {
   const installedMap = await detect(drivers);
   const installed = Object.keys(installedMap);
   const lineup = o.agents ?? config.agents ?? defaultLineup(installed);
-  if (!lineup) throw new Error(`no agent CLIs found. Install at least one of: Claude Code, Codex, Gemini CLI, Cursor CLI, OpenCode, Pi.\nRun "argue doctor" for install commands.`);
+  if (!lineup)
+    throw new Error(
+      `no agent CLIs found. Install at least one of: Claude Code, Codex, Gemini CLI, Cursor CLI, OpenCode, Pi.\nRun "argue doctor" for install commands.`,
+    );
   const agents = parseAgents(lineup, drivers);
   if (agents.length < 2) throw new Error(`need at least two competitors. With one CLI you can repeat it: --agents ${agents[0].kind},${agents[0].kind}`);
   if (agents.length > 8) throw new Error("at most 8 competitors");
@@ -130,7 +133,7 @@ async function runTask(cwd, rest, o, argv) {
   else if (check === "auto" || check == null) check = mode === "code" ? detectCheck(await projectRoot(cwd)) : null;
 
   const rounds = num(o.rounds ?? config.rounds, "rounds", 0, 10);
-  const budget = o.budget ?? config.budget ? num(o.budget ?? config.budget, "budget", 0, 10000) : undefined;
+  const budget = (o.budget ?? config.budget) ? num(o.budget ?? config.budget, "budget", 0, 10000) : undefined;
   const timeout = num(o.timeout ?? config.timeout, "timeout", 1, 600);
 
   if (o.bg) {
@@ -139,9 +142,13 @@ async function runTask(cwd, rest, o, argv) {
     if (o.json) {
       const run = await waitForRun(cwd, runId);
       if (!run) throw new Error(`run failed to start; see ${log}`);
-      return console.log(JSON.stringify({ run_id: runId, status: "running", agents: run.meta.agents, judge: run.meta.judge, next: `argue wait ${runId}` }, null, 2));
+      return console.log(
+        JSON.stringify({ run_id: runId, status: "running", agents: run.meta.agents, judge: run.meta.judge, next: `argue wait ${runId}` }, null, 2),
+      );
     }
-    console.log(`${green("started")} ${runId}\n  ${dim("follow:")}  argue watch ${runId}\n  ${dim("apply:")}   argue apply ${runId}\n  ${dim("log:")}     ${log}`);
+    console.log(
+      `${green("started")} ${runId}\n  ${dim("follow:")}  argue watch ${runId}\n  ${dim("apply:")}   argue apply ${runId}\n  ${dim("log:")}     ${log}`,
+    );
     return;
   }
 
@@ -164,7 +171,25 @@ async function runTask(cwd, rest, o, argv) {
   const onEvent = quiet ? () => {} : progressPrinter(write);
 
   try {
-    const result = await argue({ task, agents, judge, drivers, installed: installedMap, cwd, mode, check, rounds, budget, timeout, apply: o.apply, keep: o.keep, ctx: o.context ?? "", runId: o["run-id"], onEvent, signal: controller.signal });
+    const result = await argue({
+      task,
+      agents,
+      judge,
+      drivers,
+      installed: installedMap,
+      cwd,
+      mode,
+      check,
+      rounds,
+      budget,
+      timeout,
+      apply: o.apply,
+      keep: o.keep,
+      ctx: o.context ?? "",
+      runId: o["run-id"],
+      onEvent,
+      signal: controller.signal,
+    });
     if (o.json) console.log(JSON.stringify(result, null, 2));
     else if (!quiet) printResult(result);
   } catch (err) {
@@ -207,7 +232,8 @@ async function doctor(cwd) {
   if (lineup) {
     const agents = parseAgents(lineup, drivers);
     console.log(`${bold("Judge")}           ${config.judge ?? defaultJudge(installed, agents)}`);
-    if (new Set(agents.map((a) => a.kind)).size === 1) console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
+    if (new Set(agents.map((a) => a.kind)).size === 1)
+      console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
   }
   const check = detectCheck(await projectRoot(cwd));
   console.log(`${bold("Check here")}      ${check ?? dim("none detected (pass --check)")}`);
@@ -254,7 +280,14 @@ async function integrations(only, remove) {
 
 async function runsCmd(cwd, o) {
   const runs = await listRuns(cwd);
-  if (o.json) return console.log(JSON.stringify(runs.map((r) => ({ id: r.id, status: r.status, task: r.meta.task, winner: r.result?.winner ?? null })), null, 2));
+  if (o.json)
+    return console.log(
+      JSON.stringify(
+        runs.map((r) => ({ id: r.id, status: r.status, task: r.meta.task, winner: r.result?.winner ?? null })),
+        null,
+        2,
+      ),
+    );
   if (!runs.length) return console.log("no runs yet");
   for (const r of runs.slice(0, 30)) {
     const st = r.status === "done" ? green("done") : r.status === "running" ? yellow("running") : red(r.status);
@@ -295,8 +328,8 @@ async function waitCmd(cwd, id, o) {
 async function cancelCmd(cwd, id) {
   const run = await findRun(cwd, id);
   if (run.status !== "running") return console.log(`run ${run.id} is ${run.status}`);
-  process.kill(run.meta.pid, "SIGTERM");
-  console.log(`cancelling ${run.id}`);
+  await requestCancel(run);
+  console.log(`cancelled ${run.id}`);
 }
 
 async function applyCmd(cwd, id, o) {
@@ -306,7 +339,9 @@ async function applyCmd(cwd, id, o) {
   const file = o.agent ? join(run.path, `${o.agent.toUpperCase()}.patch`) : run.result.patch;
   if (!existsSync(file)) throw new Error(`no patch for agent ${o.agent}`);
   await applyPatch(run.result.project, file);
-  console.log(`${green("✓ applied")} ${o.agent ? `agent ${o.agent.toUpperCase()}` : `winner ${run.result.winner.id} (${run.result.winner.agent})`} → ${run.result.files.join(", ")}`);
+  console.log(
+    `${green("✓ applied")} ${o.agent ? `agent ${o.agent.toUpperCase()}` : `winner ${run.result.winner.id} (${run.result.winner.agent})`} → ${run.result.files.join(", ")}`,
+  );
 }
 
 function trim(s = "", n) {

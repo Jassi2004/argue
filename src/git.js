@@ -8,7 +8,13 @@ const ID = ["-c", "user.name=argue", "-c", "user.email=argue@localhost", "-c", "
 
 async function git(cwd, ...args) {
   const res = await run("git", args, { cwd });
-  if (res.code !== 0) throw new Error(`git ${args.filter((a) => !a.startsWith("-c") && !a.includes("=")).slice(0, 2).join(" ")}: ${(res.stderr || res.stdout).trim().split("\n").pop()}`);
+  if (res.code !== 0)
+    throw new Error(
+      `git ${args
+        .filter((a) => !a.startsWith("-c") && !a.includes("="))
+        .slice(0, 2)
+        .join(" ")}: ${(res.stderr || res.stdout).trim().split("\n").pop()}`,
+    );
   return res.stdout.replace(/\s+$/, "");
 }
 
@@ -73,7 +79,25 @@ function copyTree(from, to) {
 }
 
 /** Build artefacts and caches that must never end up in a patch (on top of the project's .gitignore). */
-const JUNK = ["__pycache__/", "*.py[cod]", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".DS_Store", "Thumbs.db", "*.swp", ".coverage", "coverage/", ".nyc_output/", "node_modules/", ".venv/", ".tox/", ".argue/", "*.tsbuildinfo", ".eslintcache"];
+const JUNK = [
+  "__pycache__/",
+  "*.py[cod]",
+  ".pytest_cache/",
+  ".mypy_cache/",
+  ".ruff_cache/",
+  ".DS_Store",
+  "Thumbs.db",
+  "*.swp",
+  ".coverage",
+  "coverage/",
+  ".nyc_output/",
+  "node_modules/",
+  ".venv/",
+  ".tox/",
+  ".argue/",
+  "*.tsbuildinfo",
+  ".eslintcache",
+];
 let junkFile;
 function junkExcludes() {
   if (!junkFile) {
@@ -155,7 +179,10 @@ export function diffFiles(diff = "") {
 /** Apply a patch to the user's project (repo or plain folder). */
 export async function applyPatch(target, patchFile) {
   let last = "";
-  for (const args of [["apply", "--whitespace=nowarn"], ["apply", "--3way", "--whitespace=nowarn"]]) {
+  for (const args of [
+    ["apply", "--whitespace=nowarn"],
+    ["apply", "--3way", "--whitespace=nowarn"],
+  ]) {
     const res = await run("git", [...args, patchFile], { cwd: target });
     if (res.code === 0) return;
     last = (res.stderr || res.stdout).trim();

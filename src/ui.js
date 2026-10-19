@@ -8,7 +8,13 @@ export const red = c(31);
 export const yellow = c(33);
 export const cyan = c(36);
 
-const PHASE = { propose: "propose · each agent solves it alone", answer: "answer · each agent answers alone", critique: "critique · agents attack each other", revise: "revise · agents fix what holds up", judge: "judge · picking the winner" };
+const PHASE = {
+  propose: "propose · each agent solves it alone",
+  answer: "answer · each agent answers alone",
+  critique: "critique · agents attack each other",
+  revise: "revise · agents fix what holds up",
+  judge: "judge · picking the winner",
+};
 
 /** Returns an onEvent handler that prints progress to `write`. */
 export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`)) {
@@ -39,7 +45,11 @@ export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`)) {
       case "objections":
         {
           const unclear = (e.reviewers ?? 0) - e.count - (e.approvals ?? 0);
-          const msg = e.count ? `${e.count} reviewer(s) raised issues` : unclear > 0 ? `no objections (${unclear} unclear review${unclear > 1 ? "s" : ""})` : "approved by all reviewers";
+          const msg = e.count
+            ? `${e.count} reviewer(s) raised issues`
+            : unclear > 0
+              ? `no objections (${unclear} unclear review${unclear > 1 ? "s" : ""})`
+              : "approved by all reviewers";
           write(`  ${e.count ? yellow("!") : unclear > 0 ? dim("?") : green("✓")} ${cyan(e.who)} ${msg}`);
         }
         break;

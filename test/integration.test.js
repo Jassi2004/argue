@@ -75,7 +75,17 @@ test("code mode: check picks the passing agent, user files untouched until apply
 test("works in a plain folder (no git) and a repo without commits", async () => {
   for (const opts of [{ git: false }, { git: true, commit: false }]) {
     const dir = makeRepo(opts);
-    const result = await argue({ task: "fix add", agents: parseAgents("good,bad", drivers), judge: parseAgents("good", drivers)[0], drivers, installed, cwd: dir, check: "node test.mjs", rounds: 1, apply: true });
+    const result = await argue({
+      task: "fix add",
+      agents: parseAgents("good,bad", drivers),
+      judge: parseAgents("good", drivers)[0],
+      drivers,
+      installed,
+      cwd: dir,
+      check: "node test.mjs",
+      rounds: 1,
+      apply: true,
+    });
     assert.equal(result.winner.agent, "good", JSON.stringify(opts));
     assert.equal(result.applied, true);
     execFileSync("node", ["test.mjs"], { cwd: dir });
@@ -87,14 +97,32 @@ test("uncommitted edits to tracked files are what agents start from", async () =
   writeFileSync(join(dir, "extra.js"), "export const x = 1;\n");
   execFileSync("git", ["add", "extra.js"], { cwd: dir });
   writeFileSync(join(dir, "extra.js"), "export const x = 2;\n"); // dirty, staged-then-modified
-  const result = await argue({ task: "t", agents: parseAgents("good,bad", drivers), judge: parseAgents("good", drivers)[0], drivers, installed, cwd: dir, check: "node test.mjs", rounds: 0 });
+  const result = await argue({
+    task: "t",
+    agents: parseAgents("good,bad", drivers),
+    judge: parseAgents("good", drivers)[0],
+    drivers,
+    installed,
+    cwd: dir,
+    check: "node test.mjs",
+    rounds: 0,
+  });
   // The winning patch only touches math.js; the dirty extra.js was part of the base, so it is not in the diff.
   assert.deepEqual(result.files, ["math.js"]);
 });
 
 test("ask mode: no edits, judge answer returned", async () => {
   const dir = makeRepo();
-  const result = await argue({ task: "how should I cache?", mode: "ask", agents: parseAgents("good,bad", drivers), judge: parseAgents("good", drivers)[0], drivers, installed, cwd: dir, rounds: 1 });
+  const result = await argue({
+    task: "how should I cache?",
+    mode: "ask",
+    agents: parseAgents("good,bad", drivers),
+    judge: parseAgents("good", drivers)[0],
+    drivers,
+    installed,
+    cwd: dir,
+    rounds: 1,
+  });
   assert.equal(result.mode, "ask");
   assert.ok(result.answer.length > 0);
   assert.equal(result.patch, null);
@@ -116,7 +144,19 @@ test("cancellation via AbortSignal stops the run", async () => {
   const ac = new AbortController();
   setTimeout(() => ac.abort(), 500);
   const t0 = Date.now();
-  await assert.rejects(argue({ task: "t", agents: parseAgents("slow,slow", d), judge: parseAgents("slow", d)[0], drivers: d, installed: { slow: "custom" }, cwd: dir, rounds: 1, signal: ac.signal }), /cancelled/);
+  await assert.rejects(
+    argue({
+      task: "t",
+      agents: parseAgents("slow,slow", d),
+      judge: parseAgents("slow", d)[0],
+      drivers: d,
+      installed: { slow: "custom" },
+      cwd: dir,
+      rounds: 1,
+      signal: ac.signal,
+    }),
+    /cancelled/,
+  );
   assert.ok(Date.now() - t0 < 10_000, "should stop quickly");
 });
 
@@ -177,7 +217,10 @@ test("install writes every integration into a fake home and uninstall removes th
   process.env.XDG_CONFIG_HOME = join(home, ".config");
   try {
     const res = await install({ home, only: ["skill", "codex", "cursor", "gemini", "opencode", "pi"] });
-    assert.ok(res.every((r) => r.status === "installed"), JSON.stringify(res));
+    assert.ok(
+      res.every((r) => r.status === "installed"),
+      JSON.stringify(res),
+    );
     assert.ok(existsSync(join(home, ".agents", "skills", "argue", "SKILL.md")));
     assert.match(readFileSync(join(home, ".codex", "config.toml"), "utf8"), /model = "gpt-5"[\s\S]*\[mcp_servers\.argue\]/);
     const cursor = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8"));
@@ -207,11 +250,23 @@ test("node_modules is shared into worktrees but never part of the patch; subdire
   writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
   mkdirSync(join(dir, "node_modules", "dep"), { recursive: true });
   writeFileSync(join(dir, "node_modules", "dep", "index.js"), "export const five = 5;\n");
-  writeFileSync(join(dir, "test.mjs"), 'import { add } from "./math.js";\nimport { five } from "./node_modules/dep/index.js";\nif (add(2, 3) !== five) process.exit(1);\n');
+  writeFileSync(
+    join(dir, "test.mjs"),
+    'import { add } from "./math.js";\nimport { five } from "./node_modules/dep/index.js";\nif (add(2, 3) !== five) process.exit(1);\n',
+  );
   execFileSync("git", ["add", "."], { cwd: dir });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "deps"], { cwd: dir });
   mkdirSync(join(dir, "sub"));
-  const result = await argue({ task: "fix", agents: parseAgents("bad,good", drivers), judge: parseAgents("good", drivers)[0], drivers, installed, cwd: join(dir, "sub"), check: "node test.mjs", rounds: 0 });
+  const result = await argue({
+    task: "fix",
+    agents: parseAgents("bad,good", drivers),
+    judge: parseAgents("good", drivers)[0],
+    drivers,
+    installed,
+    cwd: join(dir, "sub"),
+    check: "node test.mjs",
+    rounds: 0,
+  });
   assert.equal(result.winner.agent, "good");
   assert.deepEqual(result.files, ["math.js"]);
   assert.ok(existsSync(join(dir, ".argue", "runs", result.runId)), "runs stored at repo root");
@@ -233,7 +288,7 @@ test("CLI: --bg --json, wait, show, runs, cancel", async () => {
   assert.match(cli("runs"), new RegExp(started.run_id));
 
   const slow = JSON.parse(cli("x", "-a", "slow,slow", "-j", "slow", "-c", "none", "--bg", "--json"));
-  assert.match(cli("cancel", slow.run_id), /cancelling/);
+  assert.match(cli("cancel", slow.run_id), /cancelled/);
   s = JSON.parse(cli("wait", slow.run_id, "-t", "15"));
   assert.equal(s.status, "failed");
 });

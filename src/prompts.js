@@ -29,7 +29,10 @@ When done, reply with a brief summary: approach, files changed, how you verified
 
 export function critiqueCode({ task, check, self, rivals, ctx }) {
   const list = rivals
-    .map((r) => `- Solution ${r.id}: patch at \`${r.patchFile}\`${r.check ? ` (acceptance check ${r.check.pass ? "PASSED" : "FAILED"})` : ""}${r.summary ? `\n  Author's summary: ${oneParagraph(r.summary)}` : ""}`)
+    .map(
+      (r) =>
+        `- Solution ${r.id}: patch at \`${r.patchFile}\`${r.check ? ` (acceptance check ${r.check.pass ? "PASSED" : "FAILED"})` : ""}${r.summary ? `\n  Author's summary: ${oneParagraph(r.summary)}` : ""}`,
+    )
     .join("\n");
   return `${RULES}
 
@@ -55,7 +58,9 @@ VERDICT: OK | ISSUES
 }
 
 export function reviseCode({ task, check, feedback, checkResult, ctx }) {
-  const checkInfo = check ? `Acceptance check \`${check}\` on your current solution: ${checkResult?.pass ? "PASSED" : `FAILED\n\`\`\`\n${checkResult?.output ?? ""}\n\`\`\``}\n` : "";
+  const checkInfo = check
+    ? `Acceptance check \`${check}\` on your current solution: ${checkResult?.pass ? "PASSED" : `FAILED\n\`\`\`\n${checkResult?.output ?? ""}\n\`\`\``}\n`
+    : "";
   return `${RULES}
 
 TASK:
@@ -73,11 +78,13 @@ When done, reply with a brief summary: what you changed, which critiques you rej
 
 export function judgeCode({ task, check, candidates, ctx }) {
   const list = candidates
-    .map((c) => `### Candidate ${c.id}
+    .map(
+      (c) => `### Candidate ${c.id}
 Patch: \`${c.patchFile}\` (${c.stats.files} files, +${c.stats.add}/-${c.stats.del})
 Acceptance check: ${c.check ? (c.check.pass ? "PASSED" : "FAILED") : "none"}
 Unresolved reviewer objections: ${c.objections}${c.testEdits?.length ? `\nModified pre-existing test files: ${c.testEdits.join(", ")} (inspect: adding tests is fine, weakening or deleting existing assertions is disqualifying)` : ""}
-Author's summary: ${oneParagraph(c.summary)}`)
+Author's summary: ${oneParagraph(c.summary)}`,
+    )
     .join("\n\n");
   return `You are the impartial judge of a coding competition between AI agents. You did not write any of these solutions.
 

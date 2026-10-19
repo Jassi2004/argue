@@ -63,7 +63,10 @@ test("every built-in driver has bin, title and install hint", () => {
 });
 
 test("parseVerdict: reads JSON, normalises ids, falls back to fewest objections", () => {
-  const pool = [{ id: "A", objections: 2 }, { id: "B", objections: 0 }];
+  const pool = [
+    { id: "A", objections: 2 },
+    { id: "B", objections: 0 },
+  ];
   assert.equal(parseVerdict('blah {"winner":"A","ranking":["A","B"],"reason":"r","risks":"none"}', pool).winner, "A");
   assert.equal(parseVerdict('{"winner":"Candidate B"}', pool).winner, "B");
   assert.equal(parseVerdict("no json", pool).winner, "B");
@@ -109,7 +112,8 @@ test("stripTomlTable removes a table and its sub-tables only", () => {
 });
 
 test("modifiedTests flags edits to existing tests, not new test files", () => {
-  const d = "diff --git a/test.mjs b/test.mjs\n--- a/test.mjs\n+++ b/test.mjs\n" +
+  const d =
+    "diff --git a/test.mjs b/test.mjs\n--- a/test.mjs\n+++ b/test.mjs\n" +
     "diff --git a/src/a.spec.ts b/src/a.spec.ts\nnew file mode 100644\n" +
     "diff --git a/lib/x.js b/lib/x.js\n" +
     "diff --git a/tests/util.py b/tests/util.py\ndeleted file mode 100644\n";

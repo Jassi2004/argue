@@ -4,7 +4,7 @@ import { detect, registry } from "./agents.js";
 import { startDetached, waitForFinish, waitForRun } from "./background.js";
 import { loadConfig } from "./config.js";
 import { applyPatch } from "./git.js";
-import { findRun, listRuns, readEvents } from "./runs.js";
+import { findRun, listRuns, readEvents, requestCancel } from "./runs.js";
 import { VERSION } from "./version.js";
 
 /**
@@ -23,11 +23,23 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        task: { type: "string", description: "Complete, self-contained task description: goal, relevant files, constraints, what has been tried. Agents do not see this conversation." },
+        task: {
+          type: "string",
+          description:
+            "Complete, self-contained task description: goal, relevant files, constraints, what has been tried. Agents do not see this conversation.",
+        },
         cwd: { type: "string", description: "Absolute path of the project directory." },
         context: { type: "string", description: "Optional extra context from this session (findings, errors, logs) to share with all agents." },
-        mode: { type: "string", enum: ["code", "ask"], description: "code (default): agents edit files and a winning patch is produced. ask: agents debate an answer without editing (design, debugging, analysis)." },
-        agents: { type: "string", description: 'Comma-separated lineup, e.g. "claude,codex" or "claude:opus,claude:sonnet@high". Omit to auto-pick from installed CLIs.' },
+        mode: {
+          type: "string",
+          enum: ["code", "ask"],
+          description:
+            "code (default): agents edit files and a winning patch is produced. ask: agents debate an answer without editing (design, debugging, analysis).",
+        },
+        agents: {
+          type: "string",
+          description: 'Comma-separated lineup, e.g. "claude,codex" or "claude:opus,claude:sonnet@high". Omit to auto-pick from installed CLIs.',
+        },
         judge: { type: "string", description: "Agent that picks the winner. Omit to auto-pick." },
         check: { type: "string", description: 'Acceptance command run in each copy, e.g. "npm test". Omit to auto-detect; "none" to disable.' },
         rounds: { type: "number", description: "Max critique/revise rounds (default 2)." },
@@ -39,7 +51,8 @@ const TOOLS = [
   },
   {
     name: "argue_wait",
-    description: "Wait for an argue run (up to `seconds`, default 50) and return its progress, or the final result once done. Call repeatedly until status is 'done' or 'failed'. Show the user brief progress between calls.",
+    description:
+      "Wait for an argue run (up to `seconds`, default 50) and return its progress, or the final result once done. Call repeatedly until status is 'done' or 'failed'. Show the user brief progress between calls.",
     inputSchema: {
       type: "object",
       properties: { run_id: { type: "string" }, cwd: { type: "string" }, seconds: { type: "number" } },
@@ -51,7 +64,11 @@ const TOOLS = [
     description: "Apply a finished run's winning patch (or a specific agent's patch) to the project working tree.",
     inputSchema: {
       type: "object",
-      properties: { run_id: { type: "string" }, cwd: { type: "string" }, agent: { type: "string", description: "Agent letter (A, B, …) to apply instead of the winner." } },
+      properties: {
+        run_id: { type: "string" },
+        cwd: { type: "string" },
+        agent: { type: "string", description: "Agent letter (A, B, …) to apply instead of the winner." },
+      },
       required: ["run_id", "cwd"],
     },
   },
@@ -112,7 +129,8 @@ async function dispatch(method, params, progress) {
         protocolVersion: params.protocolVersion ?? "2025-06-18",
         capabilities: { tools: {} },
         serverInfo: { name: "argue", title: "argue", version: VERSION },
-        instructions: "Use argue for hard or high-stakes coding tasks: argue_start, then argue_wait until done, then show the user the winner, reason, risks and files, and ask before argue_apply.",
+        instructions:
+          "Use argue for hard or high-stakes coding tasks: argue_start, then argue_wait until done, then show the user the winner, reason, risks and files, and ask before argue_apply.",
       };
     case "ping":
       return {};
@@ -160,7 +178,13 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
         } catch {}
         throw new Error(`run failed to start${tailLog ? `: ${tailLog}` : ""}`);
       }
-      return { run_id: runId, status: "running", agents: run.meta.agents, judge: run.meta.judge, next: "call argue_wait with this run_id until status is done" };
+      return {
+        run_id: runId,
+        status: "running",
+        agents: run.meta.agents,
+        judge: run.meta.judge,
+        next: "call argue_wait with this run_id until status is done",
+      };
     }
     case "argue_wait": {
       const seconds = Math.min(Math.max(Number(a.seconds) || 50, 1), 600);
@@ -185,8 +209,8 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
     case "argue_cancel": {
       const run = await findRun(cwd, a.run_id);
       if (run.status !== "running") return { status: run.status };
-      process.kill(run.meta.pid, "SIGTERM");
-      return { status: "cancelling" };
+      await requestCancel(run);
+      return { status: "cancelled" };
     }
     case "argue_runs":
       return (await listRuns(cwd)).slice(0, 20).map((r) => ({ run_id: r.id, status: r.status, task: r.meta.task, winner: r.result?.winner?.agent ?? null }));
@@ -214,10 +238,12 @@ export function summarize(run) {
       ...(r.mode === "code" ? { files: r.files, patch: r.patch, applied: r.applied, apply_error: r.applyError } : { answer: r.answer }),
       cost_usd: r.costUsd,
       report: r.report,
-      next: r.mode === "code" && !r.applied ? "Show the user the winner, reason, risks and files. Ask before calling argue_apply." : "Show the user the result.",
+      next:
+        r.mode === "code" && !r.applied ? "Show the user the winner, reason, risks and files. Ask before calling argue_apply." : "Show the user the result.",
     };
   }
-  if (run.status === "failed" || run.status === "interrupted") return { run_id: run.id, status: run.status, error: run.result?.error ?? "run stopped unexpectedly" };
+  if (run.status === "failed" || run.status === "interrupted")
+    return { run_id: run.id, status: run.status, error: run.result?.error ?? "run stopped unexpectedly" };
   const events = readEvents(run.path);
   const phases = events.filter((e) => e.type === "phase");
   const phase = phases.at(-1);
@@ -226,7 +252,24 @@ export function summarize(run) {
   const recent = events
     .filter((e) => (e.type === "call" && e.status === "done") || e.type === "check" || e.type === "note" || e.type === "objections")
     .slice(-8)
-    .map((e) => (e.type === "call" ? `${e.who} ${e.phase} ${e.ok ? "ok" : `failed: ${e.error}`} (${e.secs}s)` : e.type === "check" ? `${e.who} check ${e.pass ? "passed" : "failed"}` : e.type === "objections" ? `${e.who}: ${e.count} objection(s)` : e.text));
+    .map((e) =>
+      e.type === "call"
+        ? `${e.who} ${e.phase} ${e.ok ? "ok" : `failed: ${e.error}`} (${e.secs}s)`
+        : e.type === "check"
+          ? `${e.who} check ${e.pass ? "passed" : "failed"}`
+          : e.type === "objections"
+            ? `${e.who}: ${e.count} objection(s)`
+            : e.text,
+    );
   const elapsed = Math.round((Date.now() - (events[0]?.t ?? Date.now())) / 1000);
-  return { run_id: run.id, status: "running", phase: phase ? `${phase.name}${phase.round ? ` (round ${phase.round})` : ""}` : "setup", elapsed_s: elapsed, calls_done: calls.length, spent_usd: Math.round(lastCost * 100) / 100, recent, next: "call argue_wait again" };
+  return {
+    run_id: run.id,
+    status: "running",
+    phase: phase ? `${phase.name}${phase.round ? ` (round ${phase.round})` : ""}` : "setup",
+    elapsed_s: elapsed,
+    calls_done: calls.length,
+    spent_usd: Math.round(lastCost * 100) / 100,
+    recent,
+    next: "call argue_wait again",
+  };
 }
