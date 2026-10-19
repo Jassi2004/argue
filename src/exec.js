@@ -121,8 +121,12 @@ export function head(text = "", max = 4000) {
   return text.length > max ? `${text.slice(0, max)}\n…(truncated)` : text;
 }
 
+export function stripAnsi(s = "") {
+  return String(s).replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "");
+}
+
 export function oneLine(s = "", max = 100) {
-  const line = String(s).replace(/\s+/g, " ").trim();
+  const line = stripAnsi(s).replace(/\s+/g, " ").trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 

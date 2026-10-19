@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ask } from "./agents.js";
 import { lastJsonObject, run, shell, tail, unaborted, withSignal } from "./exec.js";
-import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree } from "./git.js";
+import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "./git.js";
 import * as P from "./prompts.js";
 import { renderReport } from "./report.js";
 
@@ -66,6 +66,15 @@ async function argueInner(opts) {
     const start = await addWorktree(ws, path);
     worktrees.push(path);
     return { path, start };
+  };
+  // Pristine scratch trees (for reviewers and the judge) are reused across rounds instead of re-created.
+  const pristine = {};
+  const scratchTree = async (name) => {
+    if (pristine[name]) {
+      await resetWorktree(ws, pristine[name].path, pristine[name].start);
+      return pristine[name];
+    }
+    return (pristine[name] = await makeTree(name));
   };
   const dropTree = async (path) => {
     if (keep) return;
@@ -167,10 +176,9 @@ async function argueInner(opts) {
           const rivals = live.filter((o) => o !== critic);
           let res;
           if (mode === "code") {
-            const tree = await makeTree(`review-${critic.id}-${round}`);
+            const tree = await scratchTree(`review-${critic.id}`);
             const staged = stagePatches(tree.path, "rivals", rivals);
             res = await call(critic, critic.id, `critique${round}`, P.critiqueCode({ task, check, self: critic.id, rivals: staged, ctx }), tree.path, true, live.length);
-            await dropTree(tree.path);
           } else {
             res = await call(critic, critic.id, `critique${round}`, P.critiqueAsk({ task, self: critic.id, rivals, ctx }), shared.path, false, live.length);
           }
@@ -240,11 +248,10 @@ async function argueInner(opts) {
       verdict = { winner: pool[0].id, ranking: [pool[0].id], reason: finalists.length > 1 && check ? "Only solution that passes the acceptance check." : "Only remaining solution.", risks: pool[0].objections ? `${pool[0].objections} unresolved reviewer objection(s); see report.` : "not separately reviewed by judge" };
     } else {
       emit({ type: "phase", name: "judge", round });
-      const judgeTree = mode === "code" ? await makeTree("judge") : shared;
+      const judgeTree = mode === "code" ? await scratchTree(Object.keys(pristine)[0] ?? "judge") : shared;
       const cands = mode === "code" ? stagePatches(judgeTree.path, "candidates", pool) : pool;
       const prompt = mode === "code" ? P.judgeCode({ task, check, candidates: cands, ctx }) : P.judgeAsk({ task, candidates: pool, ctx });
       const res = await call(judge, "judge", "judge", prompt, judgeTree.path, false, 1);
-      if (mode === "code") await dropTree(judgeTree.path);
       verdict = parseVerdict(res.ok ? res.text : "", pool);
       if (mode === "ask") answer = res.ok ? stripVerdict(res.text) : "";
       if (!res.ok) verdict.reason = `Judge failed (${res.error}); picked by checks and objections.`;

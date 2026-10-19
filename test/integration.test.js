@@ -216,3 +216,24 @@ test("node_modules is shared into worktrees but never part of the patch; subdire
   assert.deepEqual(result.files, ["math.js"]);
   assert.ok(existsSync(join(dir, ".argue", "runs", result.runId)), "runs stored at repo root");
 });
+
+test("CLI: --bg --json, wait, show, runs, cancel", async () => {
+  const dir = makeRepo();
+  writeFileSync(join(dir, ".argue.json"), JSON.stringify({ custom: { ...config.custom, slow: fake("slow") } }));
+  const cli = (...args) => execFileSync(process.execPath, [BIN, ...args], { cwd: dir, encoding: "utf8" });
+  const started = JSON.parse(cli("fix add", "-a", "bad,good", "-j", "good", "-c", "node test.mjs", "-r", "1", "--bg", "--json"));
+  assert.equal(started.status, "running");
+  let s;
+  for (let i = 0; i < 10; i++) {
+    s = JSON.parse(cli("wait", started.run_id, "-t", "10"));
+    if (s.status !== "running") break;
+  }
+  assert.equal(s.status, "done");
+  assert.match(cli("show", started.run_id), /Winner: B \(good\)/);
+  assert.match(cli("runs"), new RegExp(started.run_id));
+
+  const slow = JSON.parse(cli("x", "-a", "slow,slow", "-j", "slow", "-c", "none", "--bg", "--json"));
+  assert.match(cli("cancel", slow.run_id), /cancelling/);
+  s = JSON.parse(cli("wait", slow.run_id, "-t", "15"));
+  assert.equal(s.status, "failed");
+});
