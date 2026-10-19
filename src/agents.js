@@ -252,18 +252,23 @@ export function parseAgents(list, drivers = DRIVERS) {
 }
 
 const PRIORITY = ["claude", "codex", "gemini", "cursor", "opencode", "pi"];
+/** CLIs whose default model is reliably strong (used for default lineups and judging). */
+const JUDGES = ["claude", "codex", "gemini", "cursor"];
 
-/** Best default lineup from what is installed: up to three different vendors, else two models of one. */
+/**
+ * Best default lineup from what is installed: up to three different vendors (frontier CLIs first;
+ * Pi/OpenCode only fill gaps since their default model depends on user config), else two models of one CLI.
+ */
 export function defaultLineup(installed) {
-  const kinds = PRIORITY.filter((k) => installed.includes(k));
-  if (kinds.length >= 2) return kinds.slice(0, 3).join(",");
+  const strong = JUDGES.filter((k) => installed.includes(k));
+  const flexible = PRIORITY.filter((k) => installed.includes(k) && !JUDGES.includes(k));
+  const kinds = [...strong, ...flexible];
+  if (kinds.length >= 2) return (strong.length >= 2 ? strong : kinds).slice(0, 3).join(",");
   if (kinds[0] === "claude") return "claude:opus,claude:sonnet";
   if (kinds[0]) return `${kinds[0]},${kinds[0]}`;
   return "";
 }
 
-/** CLIs whose default model is reliably strong enough to judge. */
-const JUDGES = ["claude", "codex", "gemini", "cursor"];
 
 /**
  * Judge preference: a strong CLI that is not competing (neutral), else a strong competitor's CLI

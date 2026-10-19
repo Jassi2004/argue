@@ -23,6 +23,8 @@ test("parseAgents: kind, model, effort, slashes and colons in models", () => {
 
 test("defaultLineup prefers vendor diversity, falls back to model diversity", () => {
   assert.equal(defaultLineup(["claude", "codex", "gemini", "pi"]), "claude,codex,gemini");
+  assert.equal(defaultLineup(["claude", "codex", "pi", "opencode"]), "claude,codex");
+  assert.equal(defaultLineup(["claude", "pi"]), "claude,pi");
   assert.equal(defaultLineup(["codex", "pi"]), "codex,pi");
   assert.equal(defaultLineup(["claude"]), "claude:opus,claude:sonnet");
   assert.equal(defaultLineup(["pi"]), "pi,pi");
@@ -118,4 +120,18 @@ test("modifiedTests flags edits to existing tests, not new test files", () => {
     "diff --git a/lib/x.js b/lib/x.js\n" +
     "diff --git a/tests/util.py b/tests/util.py\ndeleted file mode 100644\n";
   assert.deepEqual(modifiedTests(d), ["test.mjs", "tests/util.py"]);
+});
+
+test("windows: .cmd shims receive arguments with spaces, quotes and metacharacters intact", { skip: process.platform !== "win32" }, async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { run } = await import("../src/exec.js");
+  const dir = mkdtempSync(join(tmpdir(), "argue-win-"));
+  writeFileSync(join(dir, "echo.js"), "console.log(JSON.stringify(process.argv.slice(2)))");
+  writeFileSync(join(dir, "fakecli.cmd"), `@node "${join(dir, "echo.js")}" %*\r\n`);
+  const args = ["plain", "with space", 'quo"te', "a&b|c<d>e^f%PATH%!g!", "trailing\\", "(paren)"];
+  const res = await run("fakecli", args, { env: { PATH: `${dir};${process.env.PATH}` } });
+  assert.equal(res.code, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout.trim()), args);
 });

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,12 +7,16 @@ import { run, which } from "./exec.js";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILL = readFileSync(join(ROOT, "skills", "argue", "SKILL.md"), "utf8");
 
-/** Command used by hosts to launch the MCP server. Prefer `argue` on PATH so upgrades keep working. */
+/**
+ * Command used by hosts to launch the MCP server.
+ * GUI apps (Cursor, Claude Desktop…) don't inherit the shell PATH, so use absolute paths and
+ * record the current PATH so the server can find git and the agent CLIs.
+ */
 async function mcpCommand() {
-  if (await which("argue")) return { command: "argue", args: ["mcp"] };
-  // Running from an npx cache (temporary): register an npx command that always resolves.
-  if (/[\\/]_npx[\\/]/.test(ROOT)) return { command: "npx", args: ["-y", "argue-ai", "mcp"] };
-  return { command: process.execPath, args: [join(ROOT, "bin", "argue.js"), "mcp"] };
+  const env = { PATH: process.env.PATH ?? "" };
+  // Running from an npx cache (temporary): register npx so it always resolves.
+  if (/[\\/]_npx[\\/]/.test(ROOT)) return { command: (await which("npx")) ?? "npx", args: ["-y", "argue-ai", "mcp"], env };
+  return { command: process.execPath, args: [realpathSync(join(ROOT, "bin", "argue.js")), "mcp"], env };
 }
 
 const SLASH_PROMPT = `Use the argue skill to run this task through multiple competing AI agents: $ARGS
@@ -58,11 +62,11 @@ export function targets(home = homedir()) {
       title: "Claude Code MCP server",
       present: () => existsSync(join(home, ".claude")) || existsSync(join(home, ".claude.json")),
       install: async () => {
-        const { command, args } = await mcpCommand();
+        const { command, args, env } = await mcpCommand();
         if (!(await which("claude")))
-          return mergeJson(join(home, ".claude.json"), (j) => ((j.mcpServers ??= {}).argue = { type: "stdio", command, args, env: {} }));
+          return mergeJson(join(home, ".claude.json"), (j) => ((j.mcpServers ??= {}).argue = { type: "stdio", command, args, env }));
         await run("claude", ["mcp", "remove", "-s", "user", "argue"], { env: { HOME: home } });
-        const res = await run("claude", ["mcp", "add", "-s", "user", "argue", "--", command, ...args], { env: { HOME: home } });
+        const res = await run("claude", ["mcp", "add", "-s", "user", "-e", `PATH=${env.PATH}`, "argue", "--", command, ...args], { env: { HOME: home } });
         if (res.code !== 0) throw new Error(res.stderr.trim() || "claude mcp add failed");
         return ["claude mcp (user scope)"];
       },
@@ -77,10 +81,10 @@ export function targets(home = homedir()) {
       title: "Codex MCP server",
       present: () => existsSync(join(home, ".codex")),
       install: async () => {
-        const { command, args } = await mcpCommand();
+        const { command, args, env } = await mcpCommand();
         const file = join(home, ".codex", "config.toml");
         const toml = existsSync(file) ? readFileSync(file, "utf8") : "";
-        const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\n`;
+        const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\n\n[mcp_servers.argue.env]\nPATH = ${JSON.stringify(env.PATH)}\n`;
         writeFileSync(file, `${stripTomlTable(toml, "mcp_servers.argue").trimEnd()}\n\n${block}`.replace(/^\n+/, ""));
         return [file];
       },
@@ -95,8 +99,8 @@ export function targets(home = homedir()) {
       title: "Cursor MCP server",
       present: () => existsSync(join(home, ".cursor")),
       install: async () => {
-        const { command, args } = await mcpCommand();
-        return mergeJson(join(home, ".cursor", "mcp.json"), (j) => ((j.mcpServers ??= {}).argue = { command, args }));
+        const { command, args, env } = await mcpCommand();
+        return mergeJson(join(home, ".cursor", "mcp.json"), (j) => ((j.mcpServers ??= {}).argue = { command, args, env }));
       },
       uninstall: () => mergeJson(join(home, ".cursor", "mcp.json"), (j) => delete j.mcpServers?.argue),
     },
@@ -105,10 +109,10 @@ export function targets(home = homedir()) {
       title: "Gemini CLI MCP server + /argue command",
       present: () => existsSync(join(home, ".gemini")),
       install: async () => {
-        const { command, args } = await mcpCommand();
+        const { command, args, env } = await mcpCommand();
         const files = mergeJson(
           join(home, ".gemini", "settings.json"),
-          (j) => ((j.mcpServers ??= {}).argue = { command, args, timeout: 600000, trust: false }),
+          (j) => ((j.mcpServers ??= {}).argue = { command, args, env, timeout: 600000, trust: false }),
         );
         const cmd = join(home, ".gemini", "commands", "argue.toml");
         mkdirSync(dirname(cmd), { recursive: true });
@@ -128,10 +132,10 @@ export function targets(home = homedir()) {
       title: "OpenCode MCP server + /argue command",
       present: () => existsSync(join(cfg, "opencode")),
       install: async () => {
-        const { command, args } = await mcpCommand();
+        const { command, args, env } = await mcpCommand();
         const files = mergeJson(
           join(cfg, "opencode", "opencode.json"),
-          (j) => ((j.mcp ??= {}).argue = { type: "local", command: [command, ...args], enabled: true }),
+          (j) => ((j.mcp ??= {}).argue = { type: "local", command: [command, ...args], environment: env, enabled: true }),
         );
         const cmd = join(cfg, "opencode", "commands", "argue.md");
         mkdirSync(dirname(cmd), { recursive: true });
