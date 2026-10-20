@@ -547,3 +547,31 @@ test("absolute project paths in the brief point agents at their own copy; change
     delete process.env.TARGET;
   }
 });
+
+test("install skips CLIs that are not installed and uninstall leaves no empty files behind", async () => {
+  const { install } = await import("../src/install.js");
+  const { mkdirSync } = await import("node:fs");
+  const home = mkdtempSync(join(tmpdir(), "argue-home-"));
+  mkdirSync(join(home, ".gemini"));
+  const prev = { PATH: process.env.PATH, XDG: process.env.XDG_CONFIG_HOME };
+  process.env.PATH = dirname(process.execPath); // node only: no agent CLIs on PATH
+  process.env.XDG_CONFIG_HOME = join(home, ".config");
+  try {
+    const res = await install({ home });
+    const status = Object.fromEntries(res.map((r) => [r.id, r.status]));
+    assert.equal(status.gemini, "skipped", "a leftover ~/.gemini folder is not an installed Gemini CLI");
+    assert.equal(status.opencode, "skipped");
+    assert.equal(status.skill, "installed");
+    assert.ok(!existsSync(join(home, ".gemini", "skills")));
+    await install({ home, only: ["gemini"] });
+    assert.ok(existsSync(join(home, ".gemini", "settings.json")));
+    await install({ home, only: ["gemini"], uninstall: true });
+    assert.ok(!existsSync(join(home, ".gemini", "settings.json")), "settings.json argue created is removed again");
+    const again = await install({ home, only: ["gemini"], uninstall: true });
+    assert.equal(again[0].status, "skipped");
+  } finally {
+    process.env.PATH = prev.PATH;
+    if (prev.XDG === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prev.XDG;
+  }
+});

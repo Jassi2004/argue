@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { onPath } from "./config.js";
 import { writeAtomic } from "./fsx.js";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -45,7 +46,7 @@ export function targets(home = homedir()) {
         const done = [];
         for (const [key, dir] of Object.entries(skillDirs)) {
           if (key === "cursor" && !existsSync(join(home, ".cursor"))) continue;
-          if (key === "gemini" && !existsSync(join(home, ".gemini"))) continue;
+          if (key === "gemini" && !onPath("gemini")) continue;
           if (key === "claude" && !existsSync(join(home, ".claude"))) continue;
           mkdirSync(dir, { recursive: true });
           writeFileSync(join(dir, "SKILL.md"), SKILL);
@@ -61,7 +62,7 @@ export function targets(home = homedir()) {
     {
       id: "claude",
       title: "Claude Code MCP server",
-      present: () => existsSync(join(home, ".claude")) || existsSync(join(home, ".claude.json")),
+      present: () => onPath("claude") || existsSync(join(home, ".claude.json")),
       install: async () => {
         const { command, args, env } = await mcpCommand();
         if (!(await which("claude")))
@@ -82,7 +83,7 @@ export function targets(home = homedir()) {
     {
       id: "codex",
       title: "Codex MCP server",
-      present: () => existsSync(join(home, ".codex")),
+      present: () => onPath("codex") || existsSync(join(home, ".codex", "config.toml")),
       install: async () => {
         const { command, args, env } = await mcpCommand();
         const file = join(home, ".codex", "config.toml");
@@ -114,7 +115,7 @@ export function targets(home = homedir()) {
     {
       id: "gemini",
       title: "Gemini CLI MCP server + /argue command",
-      present: () => existsSync(join(home, ".gemini")),
+      present: () => onPath("gemini"),
       install: async () => {
         const { command, args, env } = await mcpCommand();
         const files = mergeJson(
@@ -136,7 +137,7 @@ export function targets(home = homedir()) {
     {
       id: "opencode",
       title: "OpenCode MCP server + /argue command",
-      present: () => existsSync(join(cfg, "opencode")),
+      present: () => onPath("opencode"),
       install: async () => {
         const { command, args, env } = await mcpCommand();
         const files = mergeJson(
@@ -155,7 +156,7 @@ export function targets(home = homedir()) {
     {
       id: "pi",
       title: "Pi /argue prompt",
-      present: () => existsSync(join(home, ".pi")),
+      present: () => onPath("pi") || existsSync(join(home, ".pi", "agent")),
       install: () => {
         const file = join(home, ".pi", "agent", "prompts", "argue.md");
         mkdirSync(dirname(file), { recursive: true });
@@ -195,15 +196,21 @@ export function mergeJson(file, mutate, { removing = false } = {}) {
   return [file];
 }
 
-const removeKey = (file, path) =>
-  mergeJson(
+/** Remove one key (e.g. ["mcpServers", "argue"]); drops containers argue left empty and files that end up empty. */
+const removeKey = (file, path) => {
+  const files = mergeJson(
     file,
     (j) => {
       const parent = path.slice(0, -1).reduce((o, k) => o?.[k], j);
-      if (parent && typeof parent === "object") delete parent[path.at(-1)];
+      if (!parent || typeof parent !== "object" || !(path.at(-1) in parent)) return;
+      delete parent[path.at(-1)];
+      if (path.length > 1 && !Object.keys(parent).length) delete j[path[0]];
     },
     { removing: true },
   );
+  if (files.length && existsSync(file) && readFileSync(file, "utf8").trim() === "{}") rmSync(file, { force: true });
+  return files;
+};
 
 function removeFile(file) {
   if (!existsSync(file)) return [];
