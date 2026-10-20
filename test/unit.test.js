@@ -135,3 +135,54 @@ test("windows: .cmd shims receive arguments with spaces, quotes and metacharacte
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(JSON.parse(res.stdout.trim()), args);
 });
+
+test("harnessDefaults reads each harness's own config", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { harnessDefaults } = await import("../src/models.js");
+  const home = mkdtempSync(join(tmpdir(), "argue-models-"));
+  mkdirSync(join(home, ".codex"));
+  writeFileSync(join(home, ".codex", "config.toml"), 'model = "gpt-6"\nmodel_reasoning_effort = "high"\n\n[profiles.x]\nmodel = "other"\n');
+  mkdirSync(join(home, ".claude"));
+  writeFileSync(join(home, ".claude", "settings.json"), '{"model":"opus","effortLevel":"low"}');
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  writeFileSync(join(home, ".pi", "agent", "settings.json"), '{"defaultProvider":"openrouter","defaultModel":"deepseek/r1","defaultThinkingLevel":"high"}');
+  const env = {};
+  assert.deepEqual(
+    [harnessDefaults("codex", { home, env }).model, harnessDefaults("codex", { home, env }).effort],
+    ["gpt-6", "high"],
+    "only top-level keys, not profile tables",
+  );
+  const c = harnessDefaults("claude", { home, env });
+  if (c.modelSource !== "managed settings") assert.deepEqual([c.model, c.effort], ["opus", "low"]);
+  assert.equal(harnessDefaults("claude", { home, env: { ANTHROPIC_MODEL: "haiku" } }).model, "haiku", "env var wins");
+  assert.deepEqual([harnessDefaults("pi", { home, env }).model, harnessDefaults("pi", { home, env }).effort], ["openrouter/deepseek/r1", "high"]);
+  const empty = mkdtempSync(join(tmpdir(), "argue-models-"));
+  assert.equal(harnessDefaults("codex", { home: empty, env }).model, null, "nothing set = account default");
+  assert.equal(harnessDefaults("pi", { home: empty, env }).effort, "medium", "Pi's documented default");
+});
+
+test("describe, label and the lineup note", async () => {
+  const { describe, label, lineupNote } = await import("../src/models.js");
+  const env = { ANTHROPIC_MODEL: "" };
+  const a = describe({ kind: "codex", name: "codex:gpt-6@low", model: "gpt-6", effort: "low" }, { env });
+  assert.equal(label(a), "Codex · gpt-6 · effort low");
+  const g = describe({ kind: "gemini", name: "gemini:gemini-2.5-pro", model: "gemini-2.5-pro" }, { env });
+  assert.equal(label(g), "Gemini CLI · gemini-2.5-pro · effort n/a");
+  const note = lineupNote([a, g]);
+  assert.equal(
+    note,
+    "argue mode will argue between Codex (gpt-6, effort low) and Gemini CLI (gemini-2.5-pro). To add another harness, change a model, or raise or lower effort, just say so.",
+  );
+  assert.doesNotMatch(note, /judge/i);
+});
+
+test("checkAgent validates effort without any CLI call", async () => {
+  const { checkAgent } = await import("../src/models.js");
+  const installed = { gemini: "gemini", claude: "claude" };
+  assert.match((await checkAgent(parseAgents("gemini@high")[0], { installed })).error, /no effort setting/);
+  assert.match((await checkAgent(parseAgents("claude@turbo")[0], { installed })).error, /effort must be one of/);
+  assert.match((await checkAgent(parseAgents("codex:x")[0], { installed })).error, /not installed/);
+  assert.equal((await checkAgent(parseAgents("claude")[0], { installed })).ok, true, "a bare harness needs no check");
+});

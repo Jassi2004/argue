@@ -43,14 +43,15 @@ argue "<task>"                  # solve a task
 argue "<question>" --mode ask   # debate an answer, no code changes
 argue apply                     # apply the latest winner
 argue show                      # read the full report
-argue doctor                    # see what argue found on your machine
+argue doctor                    # your harnesses, their default models, and the lineup
+argue lineup claude:opus,codex@high   # check and save a new default lineup
 argue install / uninstall       # connect argue to your agents, or remove it
 ```
 
 Useful options:
 
 ```bash
--a claude,codex,gemini   # choose the agents (model and effort: claude:opus@high)
+-a claude,codex,gemini   # choose the agents for one run (format: harness:model@effort)
 -c "npm test"            # the command that proves the task is done (auto-detected)
 -r 2                     # rounds of review (default 2)
 -b 5                     # budget in USD (for CLIs that report cost)
@@ -58,6 +59,18 @@ Useful options:
 ```
 
 `argue --help` lists everything.
+
+## Choosing agents, models and effort
+
+`argue doctor` shows each harness with the model and effort it uses by default, read from that harness's own settings, plus the lineup argue will use.
+
+```bash
+argue lineup                                   # show the lineup
+argue lineup claude:opus@high,codex:gpt-5@low  # check each model exists, then save it as your default
+argue lineup --reset                           # back to automatic
+```
+
+Effort works with Claude Code, Codex and Pi. When you use argue from inside an agent, it tells you the lineup when a run starts. Ask it to add a harness, or to change a model or effort, and it restarts the run with the new lineup.
 
 ## Safe by default
 

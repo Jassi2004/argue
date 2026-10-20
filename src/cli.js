@@ -10,6 +10,7 @@ import { killAll, run } from "./exec.js";
 import { hasGit } from "./git.js";
 import { install } from "./install.js";
 import { startMcpServer, summarize } from "./mcp.js";
+import { describe, harnessDefaults, label, lineupNote, manageLineup } from "./models.js";
 import { markSetupDone, maybeOfferSetup } from "./setup.js";
 import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "./runs.js";
 import { bold, cyan, dim, green, printResult, progressPrinter, red, yellow } from "./ui.js";
@@ -29,7 +30,8 @@ ${bold("After a run")}
   argue cancel [run]              stop a run
 
 ${bold("Setup")}
-  argue doctor                    see which agents argue can use
+  argue doctor                    see your harnesses, their default models, and the lineup
+  argue lineup [a,b,…]            show or set the default lineup, e.g. claude:opus,codex@high
   argue install / uninstall       connect argue to your agents, or remove it
   argue init                      save your default agents and budget
 
@@ -60,6 +62,7 @@ const OPTIONS = {
   context: { type: "string" },
   agent: { type: "string" },
   "run-id": { type: "string" },
+  reset: { type: "boolean" },
   seconds: { type: "string" },
   apply: { type: "boolean" },
   bg: { type: "boolean" },
@@ -70,7 +73,7 @@ const OPTIONS = {
   help: { type: "boolean", short: "h" },
 };
 
-const COMMANDS = new Set(["apply", "show", "runs", "watch", "wait", "cancel", "doctor", "init", "install", "uninstall", "mcp", "help", "version"]);
+const COMMANDS = new Set(["apply", "show", "runs", "watch", "wait", "cancel", "doctor", "lineup", "init", "install", "uninstall", "mcp", "help", "version"]);
 
 export async function main(argv) {
   const { values: o, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true });
@@ -84,7 +87,8 @@ export async function main(argv) {
   if (!o.json && !o.bg && !o.quiet && !["install", "uninstall", "wait", "version"].includes(cmd)) await maybeOfferSetup();
   if (o.help || cmd === "help" || (!cmd && !rest.length && !o.file)) return console.log(HELP);
   if (cmd === "version") return console.log(VERSION);
-  if (cmd === "doctor") return doctor(cwd);
+  if (cmd === "doctor") return doctor(cwd, o);
+  if (cmd === "lineup") return lineupCmd(cwd, rest, o);
   if (cmd === "init") return init(cwd);
   if (cmd === "install" || cmd === "uninstall") return integrations(rest, cmd === "uninstall");
   if (cmd === "runs") return runsCmd(cwd, o);
@@ -111,6 +115,7 @@ function detectCommand(positionals, o) {
     return null;
   }
   if (first === "install" || first === "uninstall") return more.every((t) => TARGETS.includes(t)) ? first : null;
+  if (first === "lineup") return more.every((m) => !/\s/.test(m)) ? first : null;
   return more.length <= 1 && !more.some((m) => /\s/.test(m)) ? first : null;
 }
 
@@ -194,7 +199,7 @@ async function runTask(cwd, rest, o) {
     const run = await waitForStart(cwd, started);
     if (o.json) {
       return console.log(
-        JSON.stringify({ run_id: runId, status: "running", agents: run.meta.agents, judge: run.meta.judge, next: `argue wait ${runId}` }, null, 2),
+        JSON.stringify({ run_id: runId, status: "running", lineup: run.meta.agents, note: run.meta.note, next: `argue wait ${runId}` }, null, 2),
       );
     }
     console.log(
@@ -267,30 +272,79 @@ async function projectRoot(cwd) {
 
 // ---------------------------------------------------------------- doctor / init / install
 
-async function doctor(cwd) {
+async function doctor(cwd, o = {}) {
   const root = await projectRoot(cwd);
   const config = loadConfig(root);
   const drivers = registry(config);
   const found = await detect(drivers);
-  console.log(`${bold("argue")} ${VERSION} · node ${process.versions.node} · ${process.platform}`);
-  console.log(`  ${(await hasGit()) ? green("✓") : red("✗")} git`);
-  console.log(`\n${bold("Agents")}`);
-  for (const [kind, d] of Object.entries(drivers)) {
-    if (found[kind]) console.log(`  ${green("✓")} ${kind.padEnd(9)} ${d.title}${found[kind] !== d.bin && !d.custom ? dim(` (${found[kind]})`) : ""}`);
-    else console.log(`  ${dim("·")} ${dim(kind.padEnd(9))} ${dim(`${d.title} — install: ${d.install}`)}`);
-  }
   const installed = Object.keys(found);
   const lineup = config.agents ?? defaultLineup(installed);
-  console.log(`\n${bold("Default lineup")}  ${lineup || red("none — install at least one agent CLI")}`);
-  if (lineup) {
-    const agents = parseAgents(lineup, drivers);
-    console.log(`${bold("Judge")}           ${config.judge ?? defaultJudge(installed, agents)}`);
-    if (new Set(agents.map((a) => a.kind)).size === 1)
-      console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
-  }
+  const agents = lineup ? parseAgents(lineup, drivers) : [];
+  const descs = agents.map((a) => describe(a, { drivers, cwd: root }));
   const check = config.check && config.check !== "auto" ? config.check : detectCheck(root);
-  console.log(`${bold("Check here")}      ${check ?? dim("none detected (pass --check)")}`);
+
+  if (o.json)
+    return console.log(
+      JSON.stringify(
+        {
+          version: VERSION,
+          git: await hasGit(),
+          harnesses: Object.entries(drivers).map(([kind, d]) => ({
+            agent: kind,
+            name: d.title,
+            installed: Boolean(found[kind]),
+            ...harnessDefaults(kind, { cwd: root }),
+          })),
+          lineup: descs,
+          lineupSource: config.agents ? "saved" : "automatic",
+          note: descs.length ? lineupNote(descs) : null,
+          check,
+        },
+        null,
+        2,
+      ),
+    );
+
+  console.log(`${bold("argue")} ${VERSION} · node ${process.versions.node} · ${process.platform}`);
+  console.log(`  ${(await hasGit()) ? green("✓") : red("✗")} git`);
+  console.log(`\n${bold("Harnesses")}                  ${dim("default model · effort")}`);
+  for (const [kind, d] of Object.entries(drivers)) {
+    if (!found[kind]) {
+      console.log(`  ${dim("·")} ${dim(kind.padEnd(9))} ${dim(`${d.title} — install: ${d.install}`)}`);
+      continue;
+    }
+    const def = describe({ kind, name: kind }, { drivers, cwd: root });
+    const model = def.model ?? dim("account default");
+    const effort = def.effortSupported ? (def.effort ?? dim("default")) : dim("n/a");
+    console.log(
+      `  ${green("✓")} ${kind.padEnd(9)} ${d.title.padEnd(14)} ${model} · ${effort}${def.model && def.modelSource ? dim(`  (${def.modelSource})`) : ""}`,
+    );
+  }
+
+  console.log(`\n${bold("Lineup")} ${dim(config.agents ? "(saved)" : "(automatic: change it with argue lineup)")}`);
+  if (!descs.length) console.log(`  ${red("none — install at least one agent CLI")}`);
+  descs.forEach((dsc, i) => console.log(`  ${cyan(String.fromCharCode(65 + i))}  ${label(dsc)}`));
+  if (agents.length && new Set(agents.map((a) => a.kind)).size === 1)
+    console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
+  console.log(`\n${bold("Check here")}  ${check ?? dim("none detected (pass --check)")}`);
   console.log(dim(`\nLogin issues? Run each CLI once on its own (e.g. "claude", "codex") to sign in.`));
+}
+
+/** argue lineup [a,b,…] | --reset: show, set (after checking models exist) or reset the default lineup. */
+async function lineupCmd(cwd, rest, o) {
+  const spec = rest.join(",").trim();
+  if (spec && !o.json) process.stdout.write(dim("checking each model is available…\n"));
+  const res = await manageLineup(await projectRoot(cwd), { agents: spec || undefined, reset: o.reset });
+  if (o.json) {
+    if (res.saved === false) process.exitCode = 1;
+    return console.log(JSON.stringify(res, null, 2));
+  }
+  if (res.saved === false) throw new Error(`lineup not saved:\n${res.errors.map((e) => `  ${red("✗")} ${e.agent}: ${e.error}`).join("\n")}`);
+  if (res.reset) console.log(`${green("✓")} back to the automatic lineup`);
+  if (res.saved) console.log(`${green("✓")} saved as your default lineup`);
+  if (res.overriddenByProject) console.log(yellow("note: this project's .argue.json sets its own agents, which override your default here"));
+  console.log(`${bold("Lineup")} ${dim(`(${res.source})`)}`);
+  res.lineup.forEach((d, i) => console.log(`  ${cyan(String.fromCharCode(65 + i))}  ${label(d)}`));
 }
 
 async function init(cwd) {

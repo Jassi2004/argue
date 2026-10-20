@@ -6,6 +6,7 @@ import { lastJsonObject, run, shell, tail, unaborted, withScope } from "./exec.j
 import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "./git.js";
 import * as P from "./prompts.js";
 import { writeJson } from "./fsx.js";
+import { describe, lineupNote } from "./models.js";
 import { renderReport } from "./report.js";
 
 export function newRunId() {
@@ -90,12 +91,13 @@ async function argueInner(opts) {
     check,
     rounds,
     budget: budget ?? null,
-    agents: players.map((p) => ({ id: p.id, agent: p.name })),
+    agents: players.map((p) => ({ id: p.id, agent: p.name, ...pick(describe(p, { drivers, cwd: home }), ["harness", "model", "effort", "effortSupported"]) })),
     judge: judge.name,
     project: home,
     runDir,
     scratch,
   };
+  meta.note = lineupNote(meta.agents);
   writeJson(join(runDir, "meta.json"), { ...meta, status: "running", startedAt: new Date().toISOString(), pid: process.pid });
   emit({ type: "start", ...meta });
 
@@ -537,6 +539,8 @@ function rmQuiet(path) {
     rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   } catch {}
 }
+
+const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
 
 function round4(n) {
   return Math.round(n * 10000) / 10000;

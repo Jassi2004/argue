@@ -23,9 +23,15 @@ export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`)) {
       case "start":
         write(`${bold("argue")} ${dim(e.runId)}`);
         write(`  ${dim("task")}    ${trim(e.task)}`);
-        write(`  ${dim("agents")}  ${e.agents.map((a) => `${cyan(a.id)} ${a.agent}`).join("   ")}   ${dim(`judge: ${e.judge}`)}`);
+        for (const a of e.agents) {
+          const effort = a.effortSupported ? `effort ${a.effort ?? "default"}` : "";
+          write(
+            `  ${a === e.agents[0] ? dim("agents") : "      "}  ${cyan(a.id)} ${a.harness ?? a.agent} ${dim("·")} ${a.model ?? "default model"}${effort ? ` ${dim("·")} ${effort}` : ""}`,
+          );
+        }
         if (e.check) write(`  ${dim("check")}   ${e.check}`);
         if (e.mode === "ask") write(`  ${dim("mode")}    ask (no file changes)`);
+        write(dim(`  change agents, models or effort: argue lineup <a,b,…>  (e.g. claude:opus,codex@high)`));
         break;
       case "phase":
         write(`\n${bold(PHASE[e.name] ?? e.name)}${e.round ? dim(` (round ${e.round})`) : ""}`);

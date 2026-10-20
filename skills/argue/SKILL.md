@@ -21,30 +21,43 @@ Pick a mode:
 
 If a command proves the task is done (tests, a repro script), pass it with `--check`. Otherwise argue auto-detects the project's test command.
 
-## 2. Run it
+## 2. Start it and show the lineup
 
-**If you have the `argue_start` MCP tool**, call it with `task` (the brief), `cwd` (absolute project path), and optionally `mode`, `check`, `agents`. Then call `argue_wait` repeatedly until `status` is `done` or `failed`.
+**With the MCP tools:** call `argue_start` with `task` (the brief) and `cwd` (absolute project path), plus `mode` / `check` if needed.
+**With the shell** (from the project directory): `argue -f /tmp/argue-brief.md --bg --json`. If `argue` is not on PATH, use `npx -y argue-ai`.
 
-**Otherwise use the shell.** Runs take several minutes, so start in the background and poll. Run these from the project directory:
+The result contains a `note`, for example:
 
-```bash
-argue -f /tmp/argue-brief.md --bg --json            # starts the run, prints {"run_id": ...}
-argue wait <run_id>                                 # blocks up to 4 min; prints status JSON
-```
+> argue mode will argue between Claude Code (sonnet, effort default) and Codex (gpt-6.1-sol, effort high). To add another harness, change a model, or raise or lower effort, just say so.
 
-Repeat `argue wait <run_id>` until `status` is `done`, `failed` or `interrupted`. Between calls, give the user a one-line update (phase and recent events from the JSON). To stop a run: `argue cancel <run_id>`.
+**Show the user this note as-is, as a short note, then carry on.** Do not ask a question or wait for an answer.
 
-Options: `--mode ask` · `--check "<cmd>"` · `--agents claude,codex,gemini` · `--rounds 3` · `--budget 5`.
-If `argue` is not on PATH, use `npx -y argue-ai` instead.
+## 3. Wait
 
-## 3. Report back
+Call `argue_wait` (or `argue wait <run_id>` in the shell, which blocks up to 4 minutes) repeatedly until `status` is `done`, `failed` or `interrupted`. Between calls, give the user a one-line update (phase and recent events).
 
-From the final JSON, tell the user briefly:
+## 4. If the user wants a different lineup
+
+When the user asks to add or drop a harness, change a model, or raise or lower effort (during the run or before it):
+
+1. Stop the run: `argue_cancel` (shell: `argue cancel <run_id>`).
+2. Build the new lineup from the current one in the note. Format: `harness[:model][@effort]`, comma-separated, e.g. `claude:opus@high,codex:gpt-5@medium,pi`.
+   - Harnesses: `claude`, `codex`, `gemini`, `cursor`, `opencode`, `pi`.
+   - Effort exists only for `claude` (low…max), `codex` (minimal…ultra) and `pi` (off…max). For the others, tell the user it isn't supported.
+3. Check and save it: `argue_lineup` with `agents` (shell: `argue lineup <lineup>`). This verifies each model and effort is available, then saves it as the user's default.
+   - If it reports errors, tell the user which model or effort isn't available (include the suggestions it gives) and ask what to use instead. Don't restart.
+4. Start again with the same brief (step 2), and show the new note.
+
+To see the lineup without running: `argue_lineup` with no `agents` (shell: `argue lineup`). To go back to the automatic lineup: `reset: true` (shell: `argue lineup --reset`).
+
+## 5. Report back
+
+From the final result, tell the user briefly:
 - the winner and why
 - the files it changes (code mode) or the final answer (ask mode)
 - remaining risks, and any agent that failed
 - cost, and the `report` path for the full debate
 
-In code mode, **ask before applying**. To apply: `argue apply <run_id>` (or `argue_apply`). To apply a different agent's version: `argue apply <run_id> --agent B`.
+In code mode, **ask before applying**. To apply: `argue_apply` (shell: `argue apply <run_id>`). For another agent's version: `argue apply <run_id> --agent B`.
 
 If argue says fewer than two agents are available, tell the user to run `argue doctor`. If the result says `projectChanged: true`, warn the user that their files changed during the run and to review `git status` before applying.

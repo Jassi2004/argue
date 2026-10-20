@@ -1,6 +1,6 @@
 {
   "name": "argue-ai",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Make AI coding agents (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) argue over your task until the best solution wins.",
   "type": "module",
   "bin": {
