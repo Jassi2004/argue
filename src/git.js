@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { isWin, run } from "./exec.js";
@@ -176,7 +176,17 @@ export async function resetWorktree(ws, path, start) {
 
 export function removeWorktree(ws, path) {
   return serial(async () => {
-    await run("git", ["worktree", "remove", "--force", path], { cwd: ws.root });
+    await run("git", ["worktree", "remove", "--force", "--force", path], { cwd: ws.root });
+    // If git could not remove it (e.g. a file still locked on Windows), delete the folder ourselves, then prune.
+    if (existsSync(path)) {
+      for (let i = 0; i < 10 && existsSync(path); i++) {
+        try {
+          rmSync(path, { recursive: true, force: true });
+        } catch {
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      }
+    }
     await run("git", ["worktree", "prune"], { cwd: ws.root });
   });
 }
