@@ -654,3 +654,13 @@ test("first-run prompt never appears for piped/non-TTY CLI use", async () => {
   assert.doesNotMatch(res.stdout, /Welcome to argue/);
   assert.ok(!existsSync(join(home, ".agents")), "nothing installed without asking");
 });
+
+test("cancelling during setup (before agents start) still cancels", async () => {
+  const dir = makeRepo();
+  const ac = new AbortController();
+  ac.abort();
+  const t0 = Date.now();
+  await assert.rejects(play(dir, "slow,slow", { signal: ac.signal, judgeName: "slow" }), /cancelled/);
+  assert.ok(Date.now() - t0 < 10_000);
+  assert.equal(execFileSync("git", ["worktree", "list"], { cwd: dir, encoding: "utf8" }).trim().split("\n").length, 1);
+});

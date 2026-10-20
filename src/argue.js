@@ -74,7 +74,9 @@ async function argueInner(opts) {
 
   // Cross-platform cancellation: `argue cancel` drops a "cancel" file into the run folder.
   const local = new AbortController();
-  if (signal) signal.addEventListener("abort", () => local.abort(), { once: true });
+  // The caller may already have cancelled while the workspace was being prepared.
+  if (signal?.aborted) local.abort();
+  else signal?.addEventListener("abort", () => local.abort(), { once: true });
   const cancelPoll = setInterval(() => {
     if (existsSync(join(runDir, "cancel"))) local.abort();
   }, 500);
