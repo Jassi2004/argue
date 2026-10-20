@@ -1,22 +1,50 @@
 ---
 name: argue
-description: Have multiple AI coding agents (Claude Code, Codex) independently solve a hard task, critique each other, and pick the best verified solution. Use when the user says "argue", asks for multiple models to compete or debate, or wants a second opinion on a difficult change.
+description: Run a hard coding task (or design/debugging question) through several competing AI agents — e.g. Claude Code, Codex, Gemini, Cursor, OpenCode, Pi — that solve it independently, attack each other's work with evidence, revise, and have a judge pick the best verified result. Use when the user says "argue", asks for multiple models to debate/compete/cross-check, wants a second opinion, or the task is hard or high-stakes and they have no clear approach.
 ---
 
 # argue
 
-Run several coding agents against the same task in isolated git worktrees, let them critique each other, and return the winning patch.
+`argue` makes several AI coding agents compete on one task in isolated copies of the repo and returns the winning, verified result. It never changes the user's files unless asked to apply.
 
-## How to use
+## 1. Write the brief
 
-1. Write a clear task description. Include what the user wants, relevant files, what has already been tried, and constraints.
-2. If the project has a test or build command that proves the task is done, pass it as `--check`.
-3. Run (it can take several minutes; use a long timeout):
+The other agents cannot see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`). Each agent works in its own copy of the project, so refer to files by their path relative to the project root:
+- the goal, and what "done" means
+- relevant files, functions, errors, logs
+- constraints (APIs to keep, style, performance)
+- what has already been tried and why it failed
+
+Pick a mode:
+- `code` (default): agents change code; you get a winning patch.
+- `ask`: no edits; agents debate an answer (architecture, root-cause analysis, reviews, plans).
+
+If a command proves the task is done (tests, a repro script), pass it with `--check`. Otherwise argue auto-detects the project's test command.
+
+## 2. Run it
+
+**If you have the `argue_start` MCP tool**, call it with `task` (the brief), `cwd` (absolute project path), and optionally `mode`, `check`, `agents`. Then call `argue_wait` repeatedly until `status` is `done` or `failed`.
+
+**Otherwise use the shell.** Runs take several minutes, so start in the background and poll. Run these from the project directory:
 
 ```bash
-argue "<task>" --check "<test command>" --json
+argue -f /tmp/argue-brief.md --bg --json            # starts the run, prints {"run_id": ...}
+argue wait <run_id>                                 # blocks up to 4 min; prints status JSON
 ```
 
-Options: `--agents claude,codex` (default: whatever is installed), `--rounds 2`, `--budget 5`, `--apply`.
+Repeat `argue wait <run_id>` until `status` is `done`, `failed` or `interrupted`. Between calls, give the user a one-line update (phase and recent events from the JSON). To stop a run: `argue cancel <run_id>`.
 
-4. Read the JSON result. Show the user the winner, the reason, and the risks. Ask before applying, then run `git apply <patch>` (or re-run with `--apply`). The full debate is in `report`.
+Options: `--mode ask` · `--check "<cmd>"` · `--agents claude,codex,gemini` · `--rounds 3` · `--budget 5`.
+If `argue` is not on PATH, use `npx -y argue-ai` instead.
+
+## 3. Report back
+
+From the final JSON, tell the user briefly:
+- the winner and why
+- the files it changes (code mode) or the final answer (ask mode)
+- remaining risks, and any agent that failed
+- cost, and the `report` path for the full debate
+
+In code mode, **ask before applying**. To apply: `argue apply <run_id>` (or `argue_apply`). To apply a different agent's version: `argue apply <run_id> --agent B`.
+
+If argue says fewer than two agents are available, tell the user to run `argue doctor`. If the result says `projectChanged: true`, warn the user that their files changed during the run and to review `git status` before applying.
