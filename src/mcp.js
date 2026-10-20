@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { detect, registry } from "./agents.js";
+import { manageLineup } from "./models.js";
 import { startDetached, waitForFinish, waitForStart } from "./background.js";
 import { loadConfig } from "./config.js";
 import { run } from "./exec.js";
@@ -83,6 +84,21 @@ const TOOLS = [
     annotations: { title: "Cancel argue run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: "Cancel a running argue run.",
     inputSchema: { type: "object", properties: { run_id: { type: "string" }, cwd: { type: "string" } }, required: ["run_id", "cwd"] },
+  },
+  {
+    name: "argue_lineup",
+    annotations: { title: "Show or set argue lineup", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description:
+      'Show the default lineup (harness, model, effort for each competing agent), or set a new one. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Absolute path of the project directory." },
+        agents: { type: "string", description: "New lineup to check and save. Omit to just show the current one." },
+        reset: { type: "boolean", description: "Go back to the automatic lineup." },
+      },
+      required: ["cwd"],
+    },
   },
   {
     name: "argue_runs",
@@ -171,7 +187,7 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
   const cwd = a.cwd || process.cwd();
   if (!isAbsolute(cwd)) throw new Error(`cwd must be an absolute path (got "${cwd}")`);
   if (!existsSync(cwd)) throw new Error(`cwd does not exist: ${cwd}`);
-  if (name !== "argue_start" && name !== "argue_runs" && name !== "argue_agents" && !a.run_id) throw new Error("run_id is required");
+  if (!["argue_start", "argue_runs", "argue_agents", "argue_lineup"].includes(name) && !a.run_id) throw new Error("run_id is required");
   switch (name) {
     case "argue_start": {
       if (Number(process.env.ARGUE_DEPTH || 0) > 0) throw new Error("you are an agent inside an argue run; nested argue runs are not allowed");
@@ -194,9 +210,9 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
       return {
         run_id: started.runId,
         status: "running",
-        agents: run.meta.agents,
-        judge: run.meta.judge,
-        next: "call argue_wait with this run_id until status is done",
+        lineup: run.meta.agents,
+        note: run.meta.note,
+        next: "Tell the user the note (one line, as-is), then call argue_wait with this run_id until status is done. If the user asks to add a harness or change a model or effort, call argue_cancel, then argue_lineup with the new lineup (it checks and saves it), then argue_start again with the same task.",
       };
     }
     case "argue_wait": {
@@ -225,6 +241,8 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
       await requestCancel(run);
       return { status: "cancelled" };
     }
+    case "argue_lineup":
+      return lineupTool(cwd, a);
     case "argue_runs":
       return (await listRuns(cwd)).slice(0, 20).map((r) => ({ run_id: r.id, status: r.status, task: r.meta.task, winner: r.result?.winner?.agent ?? null }));
     case "argue_agents": {
@@ -236,6 +254,13 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
     default:
       throw new Error(`unknown tool ${name}`);
   }
+}
+
+async function lineupTool(cwd, a) {
+  const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
+  const res = await manageLineup(top.code === 0 ? top.stdout.trim() : cwd, { agents: a.agents, reset: a.reset });
+  if (res.saved === false) return { ...res, next: "Tell the user which model or effort is not available and ask what to use instead." };
+  return res;
 }
 
 /** Compact status for host agents: progress while running, full result when done. */

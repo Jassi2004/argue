@@ -664,3 +664,70 @@ test("cancelling during setup (before agents start) still cancels", async () => 
   assert.ok(Date.now() - t0 < 10_000);
   assert.equal(execFileSync("git", ["worktree", "list"], { cwd: dir, encoding: "utf8" }).trim().split("\n").length, 1);
 });
+
+// The fake `codex` below is a Unix shebang script; Windows can't run it as a command.
+test("argue lineup: rejects unknown models, saves valid ones, resets; doctor shows models", { skip: process.platform === "win32" }, async () => {
+  const { mkdirSync, chmodSync } = await import("node:fs");
+  const home = mkdtempSync(join(tmpdir(), "argue-home-"));
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  // A fake `codex` that lists two models (with effort levels) and answers prompts.
+  const fakeCodex = join(bin, "codex");
+  writeFileSync(
+    fakeCodex,
+    `#!/usr/bin/env node
+if (process.argv[2] === "debug") { console.log(JSON.stringify({ models: [
+  { slug: "gpt-a", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] },
+  { slug: "gpt-b", supported_reasoning_levels: [{ effort: "low" }] } ] })); process.exit(0); }
+process.exit(1);
+`,
+  );
+  chmodSync(fakeCodex, 0o755);
+  mkdirSync(join(home, ".codex"));
+  writeFileSync(join(home, ".codex", "config.toml"), 'model = "gpt-a"\nmodel_reasoning_effort = "high"\n');
+  const env = {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+    PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${dirname(process.execPath)}`,
+  };
+  const { spawnSync } = await import("node:child_process");
+  const cli = (...a) => spawnSync(process.execPath, [BIN, ...a], { cwd: home, encoding: "utf8", env });
+
+  const bad = cli("lineup", "codex:gpt-zzz,codex:gpt-b@high");
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /no model "gpt-zzz"/);
+  assert.match(bad.stderr, /gpt-b supports effort: low/);
+  assert.ok(!existsSync(join(home, ".config", "argue", "config.json")), "nothing saved on error");
+
+  const ok = cli("lineup", "codex,codex:gpt-b@low", "--json");
+  assert.equal(ok.status, 0, ok.stderr);
+  const res = JSON.parse(ok.stdout);
+  assert.equal(res.saved, true);
+  assert.deepEqual(
+    res.lineup.map((d) => [d.model, d.effort]),
+    [
+      ["gpt-a", "high"],
+      ["gpt-b", "low"],
+    ],
+  );
+  assert.match(res.note, /Codex \(gpt-a, effort high\) and Codex \(gpt-b, effort low\)/);
+  assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, "codex,codex:gpt-b@low");
+
+  const doc = JSON.parse(cli("doctor", "--json").stdout);
+  assert.equal(doc.lineupSource, "saved");
+  assert.equal(doc.harnesses.find((h) => h.agent === "codex").model, "gpt-a");
+  assert.match(cli("doctor").stdout, /Codex · gpt-b · effort low/);
+
+  assert.equal(cli("lineup", "--reset").status, 0);
+  assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, undefined);
+});
+
+test("every run records harness, model and effort, and the start note has no judge", async () => {
+  const dir = makeRepo();
+  const r = await play(dir, "good,bad", { rounds: 0 });
+  const meta = JSON.parse(readFileSync(join(r.runDir, "meta.json"), "utf8"));
+  assert.match(meta.note, /^argue mode will argue between good \(default model\) and bad \(default model\)\./);
+  assert.doesNotMatch(meta.note, /judge/i);
+  assert.equal(meta.agents[0].harness, "good");
+});
