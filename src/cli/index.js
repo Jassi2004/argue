@@ -2,29 +2,30 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { defaultJudge, defaultLineup, detect, parseAgents, registry } from "./agents.js";
-import { argue } from "./argue.js";
-import { startDetached, waitForFinish, waitForStart } from "./background.js";
-import { detectCheck, loadConfig, userConfigPath, writeConfig } from "./config.js";
-import { killAll, run } from "./exec.js";
-import { hasGit } from "./git.js";
-import { install } from "./install.js";
-import { startMcpServer, summarize } from "./mcp.js";
-import { describe, harnessDefaults, lineupNote, manageLineup } from "./models.js";
-import { markSetupDone, maybeOfferSetup } from "./setup.js";
-import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "./runs.js";
-import { bold, cyan, dim, green, lineupBox, printResult, progressPrinter, red, yellow } from "./ui.js";
-import { VERSION } from "./version.js";
+import { defaultJudge, defaultLineup, detect, parseAgents, registry } from "../harnesses/index.js";
+import { argue } from "../arena/session.js";
+import { startDetached, waitForFinish, waitForStart } from "../arena/background.js";
+import { detectCheck, loadConfig, userConfigPath, writeConfig } from "../models/config.js";
+import { killAll, run } from "../util/exec.js";
+import { hasGit } from "../workspace/git.js";
+import { install } from "../integrations/install.js";
+import { startMcpServer, summarize } from "../integrations/mcp.js";
+import { describe, harnessDefaults, lineupNote, manageLineup } from "../models/index.js";
+import { markSetupDone, maybeOfferSetup } from "../integrations/setup.js";
+import { askAbout } from "../arena/logbook.js";
+import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "../arena/runs.js";
+import { bold, cyan, dim, green, lineupBox, printResult, progressPrinter, red, yellow } from "../util/ui.js";
+import { VERSION } from "../util/version.js";
 
-const HELP = `${bold("argue")} — several AI coding agents compete on your task; the best verified solution wins.
+const HELP = `${bold("argue")} — several AI models argue it out; you get one carefully vetted answer.
 
 ${bold("Start")}
-  argue "<task>"                  solve a task (your files don't change until you apply)
-  argue "<question>" --mode ask   debate an answer, no code changes
+  argue "<question or task>"      a vetted answer, or a code change (files change only when you apply)
 
 ${bold("After a run")}
-  argue apply [run] [--agent B]   apply the winner (or another agent's version)
-  argue show [run]                read the full report
+  argue ask "<follow-up>"         question the last answer ("why not Postgres?"), using the run's record
+  argue apply [run]               apply the code change
+  argue show [run]                the full record of a run (every model's work and the critiques)
   argue runs                      list past runs
   argue watch [run]               follow a run live
   argue cancel [run]              stop a run
@@ -36,16 +37,17 @@ ${bold("Setup")}
   argue init                      save your default agents and budget
 
 ${bold("Options")}
-  -a, --agents <list>    agents to compete, e.g. claude,codex,gemini (model/effort: claude:opus@high)
+  -a, --agents <list>    models for this run: opus,gpt-6.1-sol@high · or harnesses: claude,codex · or claude:sonnet
   -c, --check <cmd>      command that proves the task is done (auto-detected; "none" to skip)
   -r, --rounds <n>       rounds of review (default 2)
   -b, --budget <usd>     spending cap (Claude Code, OpenCode, Pi report cost)
-  -j, --judge <agent>    who picks the winner (default: automatic)
-  -m, --mode <mode>      code (default) or ask
+  -j, --judge <agent>    the model that writes the final answer (default: automatic)
+  -m, --mode <mode>      code (models change files) or answer (models argue out an answer); default: guessed from the task
   -f, --file <path>      read the task from a file
       --apply            apply the winner automatically
       --bg               run in the background
       --json             machine-readable output
+      --verbose          show every model call, check and objection while it runs
   -h, --help · -v, --version
 
 More: https://github.com/Jassi2004/argue#readme`;
@@ -62,7 +64,10 @@ const OPTIONS = {
   context: { type: "string" },
   agent: { type: "string" },
   "run-id": { type: "string" },
+  run: { type: "string" },
   reset: { type: "boolean" },
+  preview: { type: "boolean" },
+  verbose: { type: "boolean" },
   seconds: { type: "string" },
   apply: { type: "boolean" },
   bg: { type: "boolean" },
@@ -73,7 +78,23 @@ const OPTIONS = {
   help: { type: "boolean", short: "h" },
 };
 
-const COMMANDS = new Set(["apply", "show", "runs", "watch", "wait", "cancel", "doctor", "lineup", "init", "install", "uninstall", "mcp", "help", "version"]);
+const COMMANDS = new Set([
+  "ask",
+  "apply",
+  "show",
+  "runs",
+  "watch",
+  "wait",
+  "cancel",
+  "doctor",
+  "lineup",
+  "init",
+  "install",
+  "uninstall",
+  "mcp",
+  "help",
+  "version",
+]);
 
 export async function main(argv) {
   const { values: o, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true });
@@ -97,6 +118,7 @@ export async function main(argv) {
   if (cmd === "wait") return waitCmd(cwd, rest[0], o);
   if (cmd === "cancel") return cancelCmd(cwd, rest[0]);
   if (cmd === "apply") return applyCmd(cwd, rest[0], o);
+  if (cmd === "ask") return askCmd(cwd, rest, o);
   return runTask(cwd, rest, o);
 }
 
@@ -116,6 +138,7 @@ function detectCommand(positionals, o) {
   }
   if (first === "install" || first === "uninstall") return more.every((t) => TARGETS.includes(t)) ? first : null;
   if (first === "lineup") return more.every((m) => !/\s/.test(m)) ? first : null;
+  if (first === "ask") return more.length ? first : null;
   return more.length <= 1 && !more.some((m) => /\s/.test(m)) ? first : null;
 }
 
@@ -132,6 +155,22 @@ function editDistance(a, b) {
   for (let i = 1; i <= a.length; i++)
     for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
   return d[a.length][b.length];
+}
+
+/**
+ * Pick the mode from the task itself, so the user never has to: "code" when they ask for a change
+ * to the project, "answer" for questions, decisions, plans, writing and research.
+ */
+export function guessMode(task) {
+  const t = task.toLowerCase();
+  const question =
+    /^\s*(what|which|why|how|should|is|are|can|could|would|does|do|when|where|who|compare|explain|evaluate|recommend|review|summari[sz]e|tell me)\b/.test(t) ||
+    /\?\s*$/.test(t);
+  const change =
+    /\b(fix|implement|add|refactor|rewrite|migrate|update|remove|delete|rename|build|create|write (a |the )?(test|function|script|endpoint|component|class|module|code)|make (it|the|this) (pass|work|faster)|optimi[sz]e|debug|patch|upgrade|port)\b/.test(
+      t,
+    );
+  return change && !question ? "code" : "answer";
 }
 
 // ---------------------------------------------------------------- run
@@ -154,8 +193,9 @@ async function runTask(cwd, rest, o) {
       `"${task}" is not a command, and one word is too little to work on.\nDescribe the task, e.g. argue "fix the flaky test in auth.spec.ts". Run "argue --help" for commands.`,
     );
 
-  const mode = o.mode ?? config.mode ?? "code";
-  if (!["code", "ask"].includes(mode)) throw new Error(`--mode must be "code" or "ask"`);
+  let mode = o.mode ?? (config.mode && config.mode !== "auto" ? config.mode : null) ?? guessMode(task);
+  if (mode === "ask") mode = "answer"; // older name
+  if (!["code", "answer"].includes(mode)) throw new Error(`--mode must be "code" (models change files) or "answer" (models argue out an answer)`);
   if (!(await hasGit())) throw new Error("git is required (https://git-scm.com/downloads)");
 
   const installedMap = await detect(drivers);
@@ -230,7 +270,7 @@ async function runTask(cwd, rest, o) {
 
   const quiet = o.quiet;
   const write = o.json ? (s) => process.stderr.write(`${s}\n`) : (s) => process.stdout.write(`${s}\n`);
-  const onEvent = quiet ? () => {} : progressPrinter(write);
+  const onEvent = quiet ? () => {} : progressPrinter(write, { verbose: o.verbose });
 
   try {
     const result = await argue({
@@ -340,8 +380,8 @@ async function doctor(cwd, o = {}) {
 /** argue lineup [a,b,…] | --reset: show, set (after checking models exist) or reset the default lineup. */
 async function lineupCmd(cwd, rest, o) {
   const spec = rest.join(",").trim();
-  if (spec && !o.json) process.stdout.write(dim("checking each model is available…\n"));
-  const res = await manageLineup(await projectRoot(cwd), { agents: spec || undefined, reset: o.reset });
+  if (spec && !o.preview && !o.json) process.stdout.write(dim("checking each model is available…\n"));
+  const res = await manageLineup(await projectRoot(cwd), { agents: spec || undefined, reset: o.reset, save: !o.preview });
   if (o.json) {
     if (res.saved === false) process.exitCode = 1;
     return console.log(JSON.stringify(res, null, 2));
@@ -452,6 +492,25 @@ async function cancelCmd(cwd, id) {
   if (run.status !== "running") return console.log(`run ${run.id} is ${run.status}`);
   await requestCancel(run);
   console.log(`cancelled ${run.id}`);
+}
+
+/** argue ask "why not Postgres?" [--run <id>]: answer a follow-up from the latest (or given) run's log book. */
+async function askCmd(cwd, rest, o) {
+  const question = rest.join(" ").trim();
+  if (!question) throw new Error('ask a question, e.g. argue ask "why not Postgres?"');
+  const root = await projectRoot(cwd);
+  const config = loadConfig(root);
+  const drivers = registry(config);
+  const installedMap = await detect(drivers);
+  const installed = Object.keys(installedMap);
+  const run = await findRun(cwd, o.run);
+  const lineup = parseAgents(run.meta.agents?.map((a) => a.agent) ?? (config.agents || defaultLineup(installed)), drivers);
+  const [agent] = parseAgents(o.judge ?? run.meta.judge ?? defaultJudge(installed, lineup), drivers);
+  if (!installedMap[agent.kind]) throw new Error(`${agent.kind} is not installed`);
+  if (!o.json) process.stderr.write(dim("checking the record of that run…\n"));
+  const res = await askAbout({ cwd, id: run.id, question, agent, drivers, installed: installedMap });
+  if (o.json) return console.log(JSON.stringify(res, null, 2));
+  console.log(`\n${res.answer}\n`);
 }
 
 async function applyCmd(cwd, id, o) {

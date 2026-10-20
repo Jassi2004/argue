@@ -13,7 +13,7 @@ export const DEFAULTS = {
   rounds: 2,
   budget: null, // USD; only enforced for CLIs that report cost
   timeout: 20, // minutes per agent call
-  mode: "code", // "code" = agents edit files, "ask" = agents only answer (design, debugging, review)
+  mode: "auto", // "auto" = guess from the task; "code" = models change files; "answer" = models argue out an answer
   custom: {}, // custom agents: { name: { command, readCommand?, title? } }
 };
 

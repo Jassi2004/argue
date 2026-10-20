@@ -1,78 +1,64 @@
 ---
 name: argue
-description: Run a hard coding task (or design/debugging question) through several competing AI agents — e.g. Claude Code, Codex, Gemini, Cursor, OpenCode, Pi — that solve it independently, attack each other's work with evidence, revise, and have a judge pick the best verified result. Use when the user says "argue", asks for multiple models to debate/compete/cross-check, wants a second opinion, or the task is hard or high-stakes and they have no clear approach.
+description: Get a carefully vetted answer by having several AI models from different labs (Claude, GPT, Gemini, …) work on the same question or task independently, cross-examine each other with evidence, improve, and combine the best into one answer. Use when the user says "argue", asks for several models to debate or cross-check something, wants a second opinion, or the question is hard or high-stakes. Works for any question or task: decisions, design, research, writing, debugging, or code changes.
 ---
 
 # argue
 
-`argue` makes several AI coding agents compete on one task in isolated copies of the repo and returns the winning, verified result. It never changes the user's files unless asked to apply.
+argue has several AI models work on the same thing, attack each other's reasoning, and combine what survives into **one vetted answer**. The user only wants that answer: not who won, which model judged, or what it cost.
 
-## 1. Show the lineup first
+## 1. Show who will argue (first message)
 
-Before anything else (before writing the brief), get the lineup and show it to the user:
+Before anything else, get the lineup:
+- **MCP:** `argue_lineup` with `cwd` (absolute project path), plus `agents` if the user named models (see step 4). Don't pass `save`.
+- **Shell:** `argue lineup --json`, or `argue lineup <agents> --preview --json` if the user named models (if `argue` isn't on PATH, use `npx -y argue-ai`).
 
-- **MCP:** call `argue_lineup` with `cwd` (absolute project path).
-- **Shell:** `argue lineup --json` (if `argue` is not on PATH, use `npx -y argue-ai`).
+Your first message to the user must be its `display` field, exactly as-is (don't announce that you're checking first). It looks like:
 
-The result has a `display` field, a small markdown table like:
+> **⚔️ Arguing with:**
+> - **claude-opus-4-1** · effort high · Claude Code
+> - **gpt-6.1-sol** · effort high · Codex
+>
+> _Want different models? Stop me and say so._
 
-**⚔️ argue lineup**
+Then carry on straight away. Don't wait for a reply.
 
-| | Harness | Model | Effort |
-|---|---|---|---|
-| A | Claude Code | sonnet | default |
-| B | Codex | gpt-6.1-sol | high |
+## 2. Start it
 
-_Want another harness, a different model, or more or less effort? Just say so._
+The other models can't see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`): what's wanted, what "done" looks like, relevant files or facts, constraints, and what's been tried. Refer to project files by their path relative to the project root.
 
-**Make it your very first message, exactly as-is.** Then carry on straight away: don't ask a question or wait for an answer.
+- **MCP:** `argue_start` with `task` (the brief) and `cwd`, plus `agents` if the user named models.
+- **Shell** (from the project directory): `argue -f /tmp/argue-brief.md --bg --json`, plus `-a <agents>` if the user named models.
 
-## 2. Write the brief
+argue works out by itself whether models should change code or just argue out an answer. Only pass `mode: "code"` / `"answer"` if it's ambiguous.
 
-The other agents cannot see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`). Each agent works in its own copy of the project, so refer to files by their path relative to the project root:
-- the goal, and what "done" means
-- relevant files, functions, errors, logs
-- constraints (APIs to keep, style, performance)
-- what has already been tried and why it failed
+## 3. Wait, then give the answer
 
-Pick a mode:
-- `code` (default): agents change code; you get a winning patch.
-- `ask`: no edits; agents debate an answer (architecture, root-cause analysis, reviews, plans).
+Call `argue_wait` (shell: `argue wait <run_id>`) until `status` is `done`, `failed` or `interrupted`. While waiting, a one-line status now and then is enough.
 
-If a command proves the task is done (tests, a repro script), pass it with `--check`. Otherwise argue auto-detects the project's test command.
+When it's done, **give the user the `answer` field as your reply.** Keep it as it is: it has already been checked by all the models. Don't add who won, judges, rounds, scores or cost.
 
-Then start the run:
-- **MCP:** `argue_start` with `task` (the brief) and `cwd`, plus `mode` / `check` if needed.
-- **Shell** (from the project directory): `argue -f /tmp/argue-brief.md --bg --json`.
+- If it ends with a line starting "Note:", keep it: it flags a real remaining disagreement.
+- **Code changes:** the answer describes the change. Ask once: "Apply it?" If yes, `argue_apply` (shell: `argue apply`).
+- If `projectChanged` is true, warn that the project's files changed during the run.
 
-You've already shown the lineup, so don't repeat it, unless it has changed since (then show the new `display`).
+## 4. If the user names models (before or during a run)
 
-## 3. Wait
+The user can name models, harnesses or both. Each item is `model`, `harness`, or `harness:model`, optionally with `@effort`:
+- `opus`, `gpt-6.1-sol@high`, `gemini-2.5-pro` (argue picks the right harness)
+- `codex`, `claude` (that harness's default model)
+- `pi:openrouter/deepseek/r1` (explicit harness and model)
 
-Call `argue_wait` (or `argue wait <run_id>` in the shell, which blocks up to 4 minutes) repeatedly until `status` is `done`, `failed` or `interrupted`. Between calls, give the user a one-line update (phase and recent events).
+Effort exists only for Claude Code (low…max), Codex (minimal…ultra) and Pi (off…max). For others, say it isn't supported. Only add `@effort` to the models the user said it for.
 
-## 4. If the user wants a different lineup
+- **For this run only** (the normal case): pass them as `agents` to `argue_start` (shell: `-a`). The saved defaults don't change.
+- **Mid-run:** `argue_cancel`, then start again with the same brief and the new `agents`, and show the new lineup.
+- **"From now on" / "make it default":** `argue_lineup` with `agents` and `save: true` (shell: `argue lineup <agents>`). This checks the models exist, then saves them.
 
-When the user asks to add or drop a harness, change a model, or raise or lower effort (during the run or before it):
+If argue reports a model isn't available, tell the user (with its suggestions) and ask what to use instead.
 
-1. Stop the run: `argue_cancel` (shell: `argue cancel <run_id>`).
-2. Build the new lineup from the current one in the note. Format: `harness[:model][@effort]`, comma-separated, e.g. `claude:opus@high,codex:gpt-5@medium,pi`.
-   - Harnesses: `claude`, `codex`, `gemini`, `cursor`, `opencode`, `pi`.
-   - Effort exists only for `claude` (low…max), `codex` (minimal…ultra) and `pi` (off…max). For the others, tell the user it isn't supported.
-3. Check and save it: `argue_lineup` with `agents` (shell: `argue lineup <lineup>`). This verifies each model and effort is available, then saves it as the user's default.
-   - If it reports errors, tell the user which model or effort isn't available (include the suggestions it gives) and ask what to use instead. Don't restart.
-4. Show the new lineup (`display` from `argue_lineup`), then start again with the same brief.
+## 5. Follow-up questions
 
-To see the lineup without running: `argue_lineup` with no `agents` (shell: `argue lineup`). To go back to the automatic lineup: `reset: true` (shell: `argue lineup --reset`).
+If the user questions or challenges the answer ("why not Postgres?", "are you sure?"), answer from the run's record: `argue ask "<their question>"` (shell). It uses everything the models found. Only start a new run if the user asks to argue it again.
 
-## 5. Report back
-
-From the final result, tell the user briefly:
-- the winner and why
-- the files it changes (code mode) or the final answer (ask mode)
-- remaining risks, and any agent that failed
-- cost, and the `report` path for the full debate
-
-In code mode, **ask before applying**. To apply: `argue_apply` (shell: `argue apply <run_id>`). For another agent's version: `argue apply <run_id> --agent B`.
-
-If argue says fewer than two agents are available, tell the user to run `argue doctor`. If the result says `projectChanged: true`, warn the user that their files changed during the run and to review `git status` before applying.
+If argue says fewer than two agents are available, tell the user to run `argue doctor`.

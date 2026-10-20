@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { newRunId } from "./argue.js";
+import { join } from "node:path";
+import { fromRoot } from "../util/paths.js";
+import { newRunId } from "./session.js";
 import { findRun } from "./runs.js";
 
-const BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "argue.js");
+const BIN = fromRoot("bin", "argue.js");
 
 /**
  * Start an argue run as a detached background process (survives the caller exiting,

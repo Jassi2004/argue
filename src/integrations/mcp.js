@@ -1,13 +1,13 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { detect, registry } from "./agents.js";
-import { manageLineup } from "./models.js";
-import { startDetached, waitForFinish, waitForStart } from "./background.js";
-import { loadConfig } from "./config.js";
-import { run } from "./exec.js";
-import { applyRun, findRun, listRuns, readEvents, reap, requestCancel } from "./runs.js";
-import { VERSION } from "./version.js";
+import { detect, registry } from "../harnesses/index.js";
+import { manageLineup } from "../models/index.js";
+import { startDetached, waitForFinish, waitForStart } from "../arena/background.js";
+import { loadConfig } from "../models/config.js";
+import { run } from "../util/exec.js";
+import { applyRun, findRun, listRuns, readEvents, reap, requestCancel } from "../arena/runs.js";
+import { VERSION } from "../util/version.js";
 
 /**
  * Minimal MCP server over stdio (JSON-RPC 2.0, newline-delimited). No dependencies.
@@ -24,7 +24,7 @@ const TOOLS = [
     name: "argue_start",
     annotations: { title: "Start argue run", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
-      "Start an argue run: several AI coding agents (e.g. Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) independently solve the same task in isolated copies of the repo, critique each other with evidence, revise, and a judge picks the best verified solution. Use for hard or high-stakes tasks, or when the user says 'argue'. Returns a run_id immediately; then call argue_wait repeatedly until status is done. Does not modify the user's files unless apply=true.",
+      "Start an argue run: several AI models from different labs work on the same question or task independently, cross-examine each other with evidence, improve, and one vetted answer is produced. Works for any question or task (decisions, design, research, writing, code). Returns a run_id immediately; then call argue_wait until status is done. Never changes the user's files unless apply=true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -37,9 +37,8 @@ const TOOLS = [
         context: { type: "string", description: "Optional extra context from this session (findings, errors, logs) to share with all agents." },
         mode: {
           type: "string",
-          enum: ["code", "ask"],
-          description:
-            "code (default): agents edit files and a winning patch is produced. ask: agents debate an answer without editing (design, debugging, analysis).",
+          enum: ["code", "answer"],
+          description: "Usually omit: argue works it out from the task. code = models change files; answer = models argue out an answer without editing.",
         },
         agents: {
           type: "string",
@@ -89,12 +88,20 @@ const TOOLS = [
     name: "argue_lineup",
     annotations: { title: "Show or set argue lineup", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      'Call this FIRST in every argue session, before writing the brief, and show the user the returned `display` as-is. Shows the default lineup (harness, model, effort for each competing agent), or sets a new one. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
+      'Call this FIRST in every argue session and show the user the returned `display` as-is. Shows who will argue (model, effort, harness): the default lineup, or the models the user named for this run. With save=true it checks and saves a new default. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
     inputSchema: {
       type: "object",
       properties: {
         cwd: { type: "string", description: "Absolute path of the project directory." },
-        agents: { type: "string", description: "New lineup to check and save. Omit to just show the current one." },
+        agents: {
+          type: "string",
+          description:
+            'Models and/or harnesses the user named, e.g. "opus,gpt-6.1-sol@high" or "claude,codex". With save=false (default) it only shows them for this run; pass the same value to argue_start.',
+        },
+        save: {
+          type: "boolean",
+          description: "Only when the user says 'from now on' / 'make it default': check the models exist and save as the default lineup.",
+        },
         reset: { type: "boolean", description: "Go back to the automatic lineup." },
       },
       required: ["cwd"],
@@ -192,7 +199,7 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
     case "argue_start": {
       if (Number(process.env.ARGUE_DEPTH || 0) > 0) throw new Error("you are an agent inside an argue run; nested argue runs are not allowed");
       if (!a.task || !String(a.task).trim()) throw new Error("task is required");
-      if (a.mode && !["code", "ask"].includes(a.mode)) throw new Error('mode must be "code" or "ask"');
+      if (a.mode && !["code", "answer", "ask"].includes(a.mode)) throw new Error('mode must be "code" or "answer"');
       // The task goes through a file so its text is never parsed as CLI flags.
       const taskFile = join(tmpdir(), `argue-task-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
       writeFileSync(taskFile, String(a.task));
@@ -259,7 +266,7 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
 
 async function lineupTool(cwd, a) {
   const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
-  const res = await manageLineup(top.code === 0 ? top.stdout.trim() : cwd, { agents: a.agents, reset: a.reset });
+  const res = await manageLineup(top.code === 0 ? top.stdout.trim() : cwd, { agents: a.agents, reset: a.reset, save: Boolean(a.save) });
   if (res.saved === false) return { ...res, next: "Tell the user which model or effort is not available and ask what to use instead." };
   return res;
 }
@@ -268,18 +275,17 @@ async function lineupTool(cwd, a) {
 export function summarize(run) {
   if (run.status === "done") {
     const r = run.result;
+    const code = r.mode === "code";
     return {
       run_id: run.id,
       status: "done",
-      winner: r.winner,
-      reason: r.reason,
-      risks: r.risks,
-      agents: r.agents,
-      ...(r.mode === "code" ? { files: r.files, patch: r.patch, applied: r.applied, apply_error: r.applyError } : { answer: r.answer }),
-      cost_usd: r.costUsd,
-      report: r.report,
+      answer: r.answer,
+      ...(code ? { files: r.files, applied: r.applied, apply_error: r.applyError } : {}),
+      projectChanged: r.projectChanged ?? false,
       next:
-        r.mode === "code" && !r.applied ? "Show the user the winner, reason, risks and files. Ask before calling argue_apply." : "Show the user the result.",
+        code && !r.applied
+          ? "Reply with `answer` as-is, then ask the user once whether to apply the change (argue_apply). Do not mention models, winners, judges or cost."
+          : 'Reply with `answer` as-is. Do not mention models, winners, judges or cost. For follow-up questions about it, run `argue ask "<question>"`.',
     };
   }
   if (run.status === "failed" || run.status === "interrupted")

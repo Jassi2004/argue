@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { jsonLines, lastJsonObject, oneLine, run, shell, tail, which } from "./exec.js";
+import { jsonLines, lastJsonObject, oneLine, run, shell, tail, which } from "../util/exec.js";
 
 /**
  * A driver wraps one coding-agent CLI in headless mode.
@@ -250,9 +250,27 @@ export function parseAgents(list, drivers = DRIVERS) {
     const colon = main.indexOf(":");
     const kind = colon < 0 ? main : main.slice(0, colon);
     const model = colon < 0 ? undefined : main.slice(colon + 1) || undefined;
-    if (!drivers[kind]) throw new Error(`unknown agent "${kind}" (known: ${Object.keys(drivers).join(", ")})`);
-    return { kind, model, effort, name: spec };
+    if (drivers[kind]) return { kind, model, effort, name: spec };
+    // Just a model name ("opus", "gpt-6.1-sol", "gemini-2.5-pro"): find the harness that runs it.
+    const home = colon < 0 ? harnessForModel(main) : null;
+    if (home) return { kind: home, model: main, effort, name: `${home}:${main}${effort ? `@${effort}` : ""}` };
+    throw new Error(
+      `unknown harness or model "${kind}". Harnesses: ${Object.keys(drivers).join(", ")}. Models can be named on their own (opus, gpt-6.1-sol, gemini-2.5-pro) or as harness:model.`,
+    );
   });
+}
+
+/**
+ * Which harness runs a bare model name, by the vendor's naming. Users can always be explicit
+ * with harness:model (e.g. pi:openrouter/deepseek/r1) for anything else.
+ */
+export function harnessForModel(model) {
+  const m = model.toLowerCase();
+  if (/^(claude|opus|sonnet|haiku|fable)\b|^claude-/.test(m)) return "claude";
+  if (/^(gpt|o\d|codex)\b|^gpt-|^o\d-|^o\d$/.test(m)) return "codex";
+  if (/^gemini\b|^gemini-/.test(m)) return "gemini";
+  if (m.includes("/")) return "pi"; // provider/model ids
+  return null;
 }
 
 const PRIORITY = ["claude", "codex", "gemini", "cursor", "opencode", "pi"];

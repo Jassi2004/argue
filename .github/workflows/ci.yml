@@ -9,7 +9,7 @@ jobs:
         with:
           node-version: 22
       - run: npm i --no-save eslint@9 @eslint/js@9 globals@16 prettier@3
-      - run: npx eslint src bin test && npx prettier --check src bin test
+      - run: npx eslint src bin test scripts && npx prettier --check src bin test scripts
   test:
     strategy:
       fail-fast: false

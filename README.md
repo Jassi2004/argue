@@ -1,25 +1,27 @@
 # argue
 
-**Several AI coding agents compete on your task. The best verified solution wins.**
+**Several AI models argue it out. You get one carefully vetted answer.**
 
 ```bash
 npm i -g argue-ai
+argue "which database should a social media app use?"
 argue "fix the race condition in ws/reconnect.ts"
 ```
 
-The first time you run argue, it offers to connect itself to your coding agents. After that, you can also just ask your agent to *"argue this"*.
+Or, inside Claude Code, Codex, Cursor, Pi and others, just say *"argue this"*. The first time you run argue, it offers to connect itself to them.
 
 ## How it works
 
-1. Each agent (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) solves the task in its own private copy of your project.
-2. Your tests run in every copy.
-3. The agents review each other's work and try to prove bugs.
-4. Each agent fixes the problems that hold up.
-5. A judge picks the winner.
+1. argue shows which models will argue (model, effort and harness).
+2. Each model works on it alone, in its own private copy of your project.
+3. They cross-examine each other's work with evidence, then fix what held up.
+4. What survives is combined into one answer for you.
 
-You get the winning change and a report of the debate. **Your files don't change** until you run `argue apply`.
+You only see the answer. If the models still disagree on something important, it ends with a short **Note:** saying so. Ask follow-ups any time with `argue ask "why not X?"`. It answers from the full record of the debate.
 
-Everything runs on your machine through the agent CLIs you already use. There's no account and no server.
+For code, your files don't change until you say so (`argue apply`).
+
+**Choosing models:** argue uses your default lineup, or the models you name: `argue "…" -a opus,gpt-6.1-sol@high`. You can name a model, a harness, or both (`codex`, `claude:sonnet`). To save a new default, run `argue lineup opus,gpt-6.1-sol`. It checks each model exists first.
 
 ## Requirements
 
@@ -39,10 +41,10 @@ With only one CLI, argue runs two copies of it. Mixing vendors works better.
 ## Commands
 
 ```bash
-argue "<task>"                  # solve a task
-argue "<question>" --mode ask   # debate an answer, no code changes
-argue apply                     # apply the latest winner
-argue show                      # read the full report
+argue "<question or task>"      # get a vetted answer (or code change)
+argue ask "<follow-up>"         # question the last answer
+argue apply                     # apply the last code change
+argue show                      # the full record of the last run
 argue doctor                    # your harnesses, their default models, and the lineup
 argue lineup claude:opus,codex@high   # check and save a new default lineup
 argue install / uninstall       # connect argue to your agents, or remove it
@@ -51,7 +53,7 @@ argue install / uninstall       # connect argue to your agents, or remove it
 Useful options:
 
 ```bash
--a claude,codex,gemini   # choose the agents for one run (format: harness:model@effort)
+-a opus,gpt-6.1-sol@high # models for this run: a model, a harness, or harness:model, with optional @effort
 -c "npm test"            # the command that proves the task is done (auto-detected)
 -r 2                     # rounds of review (default 2)
 -b 5                     # budget in USD (for CLIs that report cost)
@@ -60,17 +62,17 @@ Useful options:
 
 `argue --help` lists everything.
 
-## Choosing agents, models and effort
+## Default models
 
-`argue doctor` shows each harness with the model and effort it uses by default, read from that harness's own settings, plus the lineup argue will use.
+`argue doctor` shows each harness with the model and effort it uses by default, plus your lineup.
 
 ```bash
-argue lineup                                   # show the lineup
-argue lineup claude:opus@high,codex:gpt-5@low  # check each model exists, then save it as your default
+argue lineup                                   # show it
+argue lineup claude:opus@high,codex:gpt-5@low  # check the models exist, then save as default
 argue lineup --reset                           # back to automatic
 ```
 
-Effort works with Claude Code, Codex and Pi. When you use argue from inside an agent, it tells you the lineup when a run starts. Ask it to add a harness, or to change a model or effort, and it restarts the run with the new lineup.
+Effort works with Claude Code, Codex and Pi.
 
 ## Safe by default
 
@@ -79,6 +81,10 @@ Effort works with Claude Code, Codex and Pi. When you use argue from inside an a
 - If a fix breaks something that used to work, argue keeps the earlier version.
 - Ctrl-C stops all agents and cleans up.
 - `argue uninstall` removes everything argue added.
+
+## Changing how the models argue
+
+Everything the models are told is plain text in [`instructions/`](instructions/README.md), one file per step. See [how it works](docs/HOW-IT-WORKS.md) and [contributing](docs/CONTRIBUTING.md).
 
 ## Settings (optional)
 

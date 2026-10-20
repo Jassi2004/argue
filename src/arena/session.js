@@ -1,12 +1,12 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { ask } from "./agents.js";
-import { lastJsonObject, run, shell, tail, unaborted, withScope } from "./exec.js";
-import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "./git.js";
-import * as P from "./prompts.js";
-import { writeJson } from "./fsx.js";
-import { describe, lineupCard, lineupNote } from "./models.js";
+import { ask } from "../harnesses/index.js";
+import { lastJsonObject, run, shell, tail, unaborted, withScope } from "../util/exec.js";
+import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "../workspace/git.js";
+import * as P from "../instructions/index.js";
+import { writeJson } from "../util/fs.js";
+import { describe, lineupCard, lineupNote } from "../models/index.js";
 import { renderReport } from "./report.js";
 
 export function newRunId() {
@@ -19,7 +19,7 @@ export function newRunId() {
  * Run one argue session.
  *
  * code mode:  propose (edit) → check → [critique (prove) → revise (edit) → check]×rounds → judge → patch
- * ask mode:   answer → [critique → revise]×rounds → judge writes the final merged answer
+ * answer mode: answer → [critique → revise]×rounds → final answer merged from the best of all
  *
  * Agents are anonymous letters (A, B, C…) to each other and to the judge.
  * Each agent works in its own git worktree outside the project, so nothing touches the user's files
@@ -32,6 +32,7 @@ export function argue(opts) {
 async function argueInner(opts) {
   let { task, agents, judge, drivers, installed, cwd, mode = "code", rounds = 2, budget, timeout = 20, apply = false, keep = false, ctx = "" } = opts;
   const { onEvent = () => {}, signal } = opts;
+  if (mode === "answer") mode = "answer"; // older name
   const check = mode === "code" ? opts.check || null : null;
   const runId = opts.runId ?? newRunId();
   const originalTask = opts.task;
@@ -232,8 +233,8 @@ async function argueInner(opts) {
       emit({ type: "phase", name: mode === "code" ? "propose" : "answer", round: 0 });
       await Promise.all(
         players.map(async (p, i) => {
-          const angle = P.ANGLES[i % P.ANGLES.length];
-          const prompt = mode === "code" ? P.proposeCode({ task, check, angle, ctx }) : P.proposeAsk({ task, angle, ctx });
+          const approach = P.APPROACHES[i % P.APPROACHES.length];
+          const prompt = P.solve({ task, check, approach, ctx, isCode: mode === "code" });
           const res = await call(p, p.id, "propose", prompt, p.tree.path, mode === "code", players.length);
           p.alive = res.ok && (mode === "code" || Boolean(res.text.trim()));
           p.summary = res.ok ? res.text : "";
@@ -278,13 +279,21 @@ async function argueInner(opts) {
                 critic,
                 critic.id,
                 `critique${round}`,
-                P.critiqueCode({ task, check, self: critic.id, rivals: staged, ctx }),
+                P.critique({ task, check, self: critic.id, others: staged, ctx, isCode: true }),
                 tree.path,
                 true,
                 live.length,
               );
             } else {
-              res = await call(critic, critic.id, `critique${round}`, P.critiqueAsk({ task, self: critic.id, rivals, ctx }), shared.path, false, live.length);
+              res = await call(
+                critic,
+                critic.id,
+                `critique${round}`,
+                P.critique({ task, self: critic.id, others: rivals, ctx, isCode: false }),
+                shared.path,
+                false,
+                live.length,
+              );
             }
             if (!res.ok) return;
             const parts = P.splitCritique(
@@ -334,7 +343,7 @@ async function argueInner(opts) {
                 p,
                 p.id,
                 `revise${round}`,
-                P.reviseCode({ task, check, feedback, checkResult: p.check, ctx }),
+                P.improve({ task, check, previous: p.summary, feedback, checkResult: p.check, ctx, isCode: true }),
                 p.tree.path,
                 true,
                 live.length,
@@ -344,7 +353,15 @@ async function argueInner(opts) {
               if (res.ok) p.revisedAfter = true;
             } else {
               if (!feedback) return;
-              const res = await call(p, p.id, `revise${round}`, P.reviseAsk({ task, mine: p.summary, feedback, ctx }), shared.path, false, live.length);
+              const res = await call(
+                p,
+                p.id,
+                `revise${round}`,
+                P.improve({ task, previous: p.summary, feedback, ctx, isCode: false }),
+                shared.path,
+                false,
+                live.length,
+              );
               if (res.ok && res.text.trim()) p.summary = res.text;
               if (res.ok) p.revisedAfter = true;
             }
@@ -361,40 +378,35 @@ async function argueInner(opts) {
         }
       }
 
-      // ---------- 3. judge ----------
-      const finalists = players.filter((p) => p.alive && (mode === "ask" ? p.summary.trim() : p.diff.trim()));
+      // ---------- 3. final answer ----------
+      const finalists = players.filter((p) => p.alive && (mode === "code" ? p.diff.trim() : p.summary.trim()));
       if (!finalists.length) {
         const errors = transcript.filter((t) => !t.ok).map((t) => `${t.who} (${t.agent}): ${t.text.replace(/^ERROR: /, "")}`);
         throw new Error(`no agent produced a ${mode === "code" ? "change" : "answer"}${errors.length ? `:\n  ${errors.join("\n  ")}` : ""}`);
       }
+      // In code mode, a passing check is required when any candidate passes.
       const passing = finalists.filter((p) => !p.check || p.check.pass);
       const pool = passing.length ? passing : finalists;
+      const isCode = mode === "code";
 
       let verdict;
       let answer = "";
-      if (pool.length === 1 && mode === "code") {
-        verdict = {
-          winner: pool[0].id,
-          ranking: [pool[0].id],
-          reason: finalists.length > 1 && check ? "Only solution that passes the acceptance check." : "Only remaining solution.",
-          risks: pool[0].objections ? `${pool[0].objections} unresolved reviewer objection(s); see report.` : "not separately reviewed by judge",
-        };
-      } else if (overBudget()) {
+      if (overBudget()) {
         verdict = parseVerdict("", pool);
-        verdict.reason = `Budget of $${budget} reached before judging; picked by checks and reviewer objections.`;
-        if (mode === "ask") answer = players.find((p) => p.id === verdict.winner).summary;
+        verdict.reason = `Budget of $${budget} reached; picked by checks and reviewer objections.`;
       } else {
-        emit({ type: "phase", name: "judge", round });
-        const judgeTree = mode === "code" ? await scratchTree(Object.keys(pristine)[0] ?? "judge") : shared;
-        const cands = mode === "code" ? stagePatches(judgeTree.path, "candidates", pool) : pool;
-        const prompt = mode === "code" ? P.judgeCode({ task, check, candidates: cands, ctx }) : P.judgeAsk({ task, candidates: pool, ctx });
-        const res = await call(judge, "judge", "judge", prompt, judgeTree.path, false, 1);
+        // One model (the judge) writes the single vetted answer, or, for code, picks and explains the best change.
+        emit({ type: "phase", name: "final", round });
+        const tree = isCode ? await scratchTree(Object.keys(pristine)[0] ?? "final") : shared;
+        const cands = isCode ? stagePatches(tree.path, "candidates", pool) : pool;
+        const res = await call(judge, "judge", "final", P.finalAnswer({ task, check, candidates: cands, ctx, isCode }), tree.path, false, 1);
         verdict = parseVerdict(res.ok ? res.text : "", pool);
-        if (mode === "ask") answer = res.ok ? stripVerdict(res.text) : "";
-        if (!res.ok) verdict.reason = `Judge failed (${res.error}); picked by checks and objections.`;
+        if (res.ok) answer = scrubProcess(stripVerdict(res.text));
+        else verdict.reason = `Final step failed (${res.error}); picked by checks and objections.`;
       }
       const winner = players.find((p) => p.id === verdict.winner);
-      if (mode === "ask" && !answer) answer = winner.summary;
+      // Fall back to the chosen model's own last answer if the final step produced nothing.
+      if (!answer.trim()) answer = winner.summary;
 
       // ---------- outputs ----------
       const touched = (await projectFingerprint(ws)) !== projectBefore;
@@ -417,9 +429,8 @@ async function argueInner(opts) {
             applyError = err.message;
           }
         }
-      } else {
-        writeFileSync(join(runDir, "answer.md"), answer);
       }
+      writeFileSync(join(runDir, "answer.md"), answer);
 
       result = {
         runId,
@@ -429,7 +440,6 @@ async function argueInner(opts) {
         winner: { id: winner.id, agent: winner.name },
         reason: verdict.reason,
         risks: verdict.risks,
-        ranking: verdict.ranking,
         agents: players.map((p) => ({
           id: p.id,
           agent: p.name,
@@ -440,7 +450,8 @@ async function argueInner(opts) {
           ...(p.stats ? { files: p.stats.files, added: p.stats.add, removed: p.stats.del } : {}),
         })),
         files: mode === "code" ? diffFiles(winner.diff) : [],
-        answer: mode === "ask" ? answer : undefined,
+        answer,
+        unresolved: verdict.unresolved ?? null,
         check,
         rounds: round,
         costUsd: round4(ledger.costUsd),
@@ -548,34 +559,39 @@ function round4(n) {
 }
 
 /** Extract {"winner": ...} from judge output; fall back to fewest objections. */
+/**
+ * Read the final step's first line, {"pick": "A", "unresolved": "…"}. Also accepts the older
+ * {"winner": "A", …}. Falls back to the candidate with the fewest objections (passing checks first).
+ */
 export function parseVerdict(text, pool) {
   const ids = pool.map((p) => p.id);
-  const candidates = [...String(text ?? "").matchAll(/\{[^{}]*"winner"[^{}]*\}/g)].map((m) => m[0]);
-  const whole = lastJsonObject(text ?? "");
-  for (const c of [...candidates, whole]) {
+  const found = [...String(text ?? "").matchAll(/\{[^{}]*"(?:pick|winner)"[^{}]*\}/g)].map((m) => m[0]);
+  for (const c of [...found, lastJsonObject(text ?? "")]) {
     if (!c) continue;
     try {
       const v = typeof c === "string" ? JSON.parse(c) : c;
-      const w = String(v.winner ?? "")
+      const w = String(v.pick ?? v.winner ?? "")
         .trim()
-        .replace(/^Candidate\s+|^Answer\s+/i, "");
-      if (ids.includes(w)) {
-        const ranking = Array.isArray(v.ranking) ? v.ranking.map(String).filter((id) => ids.includes(id)) : [w];
-        return { winner: w, ranking: ranking.length ? ranking : [w], reason: String(v.reason ?? ""), risks: String(v.risks ?? "") };
-      }
+        .replace(/^(Candidate|Answer|Model|Work)\s+/i, "");
+      if (!ids.includes(w)) continue;
+      const unresolved = v.unresolved && !/^none\.?$/i.test(String(v.unresolved).trim()) ? String(v.unresolved) : null;
+      return { winner: w, reason: String(v.reason ?? ""), risks: String(v.risks ?? unresolved ?? ""), unresolved };
     } catch {}
   }
   const best = [...pool].sort((a, b) => (a.objections ?? 0) - (b.objections ?? 0))[0];
-  return {
-    winner: best.id,
-    ranking: [best.id],
-    reason: "Judge verdict unreadable; picked the candidate with the fewest reviewer objections.",
-    risks: "unknown",
-  };
+  return { winner: best.id, reason: "Picked the work with the fewest reviewer objections.", risks: "", unresolved: null };
 }
 
+/** Safety net: turn leftover "Candidate B" / "Model A's" / "Answer C" mentions into neutral wording. */
+export function scrubProcess(text = "") {
+  return text
+    .replace(/\b(?:candidate|model|answer|solution|work|agent)\s+[A-H]'s\s+/gi, "another ")
+    .replace(/\b(?:candidate|model|solution|agent)\s+[A-H]\b/gi, "another approach");
+}
+
+/** Remove the leading JSON line from the final answer. */
 export function stripVerdict(text = "") {
   const lines = text.split("\n");
-  const i = lines.findIndex((l) => /^\s*\{.*"winner".*\}\s*$/.test(l));
+  const i = lines.findIndex((l) => /^\s*\{.*"(?:pick|winner)".*\}\s*$/.test(l));
   return (i >= 0 ? [...lines.slice(0, i), ...lines.slice(i + 1)] : lines).join("\n").trim();
 }

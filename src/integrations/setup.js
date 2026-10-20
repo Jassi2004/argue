@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { userConfigPath } from "./config.js";
-import { writeJson } from "./fsx.js";
+import { userConfigPath } from "../models/config.js";
+import { writeJson } from "../util/fs.js";
 import { install, targets } from "./install.js";
-import { bold, dim, green, red } from "./ui.js";
+import { bold, dim, green, red } from "../util/ui.js";
 
 /**
  * First-run setup: the first time a person uses argue in a terminal, offer to connect it to their

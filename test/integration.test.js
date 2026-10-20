@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { parseAgents, registry } from "../src/agents.js";
-import { argue } from "../src/argue.js";
-import { callTool } from "../src/mcp.js";
+import { parseAgents, registry } from "../src/harnesses/index.js";
+import { argue } from "../src/arena/session.js";
+import { callTool } from "../src/integrations/mcp.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FAKE = join(here, "fixtures", "fake-agent.mjs");
@@ -184,7 +184,8 @@ test("MCP: start in background, wait, apply", async () => {
     if (s.status !== "running") break;
   }
   assert.equal(s.status, "done", JSON.stringify(s));
-  assert.equal(s.winner.agent, "good");
+  assert.match(s.answer, /vetted answer/);
+  assert.equal(s.winner, undefined, "the user-facing result has no winner");
   const applied = await callTool("argue_apply", { run_id: start.run_id, cwd: dir });
   assert.equal(applied.applied, true);
   execFileSync("node", ["test.mjs"], { cwd: dir });
@@ -218,7 +219,7 @@ test("MCP server speaks JSON-RPC over stdio", async () => {
 });
 
 test("install writes every integration into a fake home and uninstall removes them", async () => {
-  const { install } = await import("../src/install.js");
+  const { install } = await import("../src/integrations/install.js");
   const { mkdirSync } = await import("node:fs");
   const home = mkdtempSync(join(tmpdir(), "argue-home-"));
   for (const d of [".codex", ".cursor", ".gemini", ".pi", ".config/opencode"]) mkdirSync(join(home, d), { recursive: true });
@@ -344,7 +345,8 @@ test("judge failure falls back to evidence, it does not crash the run", async ()
   const dir = makeRepo();
   const r = await play(dir, "good,critic", { judgeName: "boom", rounds: 0 });
   assert.equal(r.status, "done");
-  assert.match(r.reason, /Judge failed/);
+  assert.match(r.reason, /Final step failed/);
+  assert.ok(r.answer.length > 0, "falls back to the chosen model's own answer");
 });
 
 test("agents get ARGUE_DEPTH so they cannot start nested runs", async () => {
@@ -439,7 +441,7 @@ test("invalid config and bad flags give clear errors", async () => {
   writeFileSync(join(dir, ".argue.json"), JSON.stringify(config));
   assert.match(cli("fix the add function", "-a", "good,bad", "-r", "nope").stderr, /--rounds must be a number/);
   assert.match(cli("fix the add function", "-a", "good").stderr, /at least two/);
-  assert.match(cli("fix the add function", "-a", "good,nope").stderr, /unknown agent "nope"/);
+  assert.match(cli("fix the add function", "-a", "good,nope").stderr, /unknown harness or model "nope"/);
   assert.match(cli("fix the add function", "--mode", "chat", "-a", "good,bad").stderr, /--mode must be/);
   assert.match(cli("fix the add function", "--frobnicate").stderr, /Unknown option/);
   assert.match(cli("apply").stderr, /no argue runs/);
@@ -469,7 +471,7 @@ test("--bg reports an immediate failure instead of hanging", async () => {
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /--budget must be/);
   // …and a background process that dies during setup is reported right away.
-  const { startDetached, waitForStart } = await import("../src/background.js");
+  const { startDetached, waitForStart } = await import("../src/arena/background.js");
   const started = startDetached({ cwd: dir, args: ["-f", join(dir, "missing-task.md")] });
   await assert.rejects(waitForStart(dir, started), /task file not found/);
   assert.ok(Date.now() - t0 < 15_000);
@@ -549,7 +551,7 @@ test("absolute project paths in the brief point agents at their own copy; change
 });
 
 test("install skips CLIs that are not installed and uninstall leaves no empty files behind", async () => {
-  const { install } = await import("../src/install.js");
+  const { install } = await import("../src/integrations/install.js");
   const { mkdirSync } = await import("node:fs");
   const home = mkdtempSync(join(tmpdir(), "argue-home-"));
   mkdirSync(join(home, ".gemini"));
@@ -595,7 +597,7 @@ test("typos of commands and one-word tasks never start a run", async () => {
 
 test("first-run setup: asks once, connects on yes, remembers no, never asks in automation", async () => {
   const { mkdirSync } = await import("node:fs");
-  const { maybeOfferSetup, interactive, readState, statePath } = await import("../src/setup.js");
+  const { maybeOfferSetup, interactive, readState, statePath } = await import("../src/integrations/setup.js");
   const home = mkdtempSync(join(tmpdir(), "argue-home-"));
   mkdirSync(join(home, ".cursor"));
   const prev = { XDG: process.env.XDG_CONFIG_HOME, PATH: process.env.PATH };
@@ -711,8 +713,8 @@ process.exit(1);
       ["gpt-b", "low"],
     ],
   );
-  assert.match(res.note, /Codex \(gpt-a, effort high\) and Codex \(gpt-b, effort low\)/);
-  assert.match(res.display, /\| B \| Codex \| gpt-b \| low \|/);
+  assert.match(res.note, /gpt-a \(effort high, Codex\), gpt-b \(effort low, Codex\)/);
+  assert.match(res.display, /- \*\*gpt-b\*\* · effort low · Codex/);
   assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, "codex,codex:gpt-b@low");
 
   const doc = JSON.parse(cli("doctor", "--json").stdout);
@@ -728,8 +730,24 @@ test("every run records harness, model and effort, and the start note has no jud
   const dir = makeRepo();
   const r = await play(dir, "good,bad", { rounds: 0 });
   const meta = JSON.parse(readFileSync(join(r.runDir, "meta.json"), "utf8"));
-  assert.match(meta.note, /^argue mode will argue between good \(default model\) and bad \(default model\)\./);
+  assert.match(meta.note, /^Arguing with account default model \(effort n\/a, good\), account default model \(effort n\/a, bad\)\./);
   assert.doesNotMatch(meta.note, /judge/i);
   assert.equal(meta.agents[0].harness, "good");
-  assert.match(meta.display, /argue lineup/);
+  assert.match(meta.display, /Arguing with/);
+});
+
+test("the user sees one vetted answer (no winner or judge), and can ask follow-ups from the log book", async () => {
+  const dir = makeRepo();
+  writeFileSync(join(dir, ".argue.json"), JSON.stringify(config));
+  const { spawnSync } = await import("node:child_process");
+  const cli = (...a) => spawnSync(process.execPath, [BIN, ...a], { cwd: dir, encoding: "utf8", env: { ...process.env, ARGUE_NO_SETUP: "1" } });
+  const run = cli("which approach is best for caching here?", "-a", "good,bad", "-j", "good", "-r", "1");
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /The vetted answer/);
+  assert.doesNotMatch(run.stdout, /winner|judge|tokens/i, "no process details for the user");
+  assert.match(run.stdout, /Arguing with|argue lineup/i, "the lineup is shown first");
+  assert.equal(readFileSync(join(dir, "math.js"), "utf8"), "export const add = (a, b) => 0;\n", "a question changes no files");
+  const ask = cli("ask", "why not something else?", "-j", "good");
+  assert.equal(ask.status, 0, ask.stderr);
+  assert.match(ask.stdout, /Because the record shows the alternatives lost/);
 });
