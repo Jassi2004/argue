@@ -665,7 +665,8 @@ test("cancelling during setup (before agents start) still cancels", async () => 
   assert.equal(execFileSync("git", ["worktree", "list"], { cwd: dir, encoding: "utf8" }).trim().split("\n").length, 1);
 });
 
-test("argue lineup: rejects unknown models, saves valid ones, resets; doctor shows models", async () => {
+// The fake `codex` below is a Unix shebang script; Windows can't run it as a command.
+test("argue lineup: rejects unknown models, saves valid ones, resets; doctor shows models", { skip: process.platform === "win32" }, async () => {
   const { mkdirSync, chmodSync } = await import("node:fs");
   const home = mkdtempSync(join(tmpdir(), "argue-home-"));
   const bin = join(home, "bin");
