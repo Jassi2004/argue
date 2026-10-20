@@ -1,9 +1,9 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DRIVERS, ask, defaultLineup, detect, parseAgents, registry } from "./agents.js";
+import { DRIVERS, ask, defaultLineup, detect, parseAgents, registry } from "../harnesses/index.js";
 import { loadConfig, userConfigPath, writeConfig } from "./config.js";
-import { run } from "./exec.js";
+import { run } from "../util/exec.js";
 
 /**
  * What model and effort each harness will use, and whether a chosen model/effort exists.
@@ -155,9 +155,8 @@ export function label(desc) {
 
 /** The note a host agent shows the user when a run starts (judge deliberately left out). */
 export function lineupNote(descs) {
-  const parts = descs.map((d) => `${d.harness} (${d.model ?? "default model"}${d.effortSupported ? `, effort ${d.effort ?? "default"}` : ""})`);
-  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
-  return `argue mode will argue between ${list}. To add another harness, change a model, or raise or lower effort, just say so.`;
+  const parts = descs.map((d) => `${d.model ?? "account default model"} (effort ${d.effortSupported ? (d.effort ?? "default") : "n/a"}, ${d.harness})`);
+  return `Arguing with ${parts.join(", ")}. Want different models? Stop me and say so.`;
 }
 
 /**
@@ -165,18 +164,8 @@ export function lineupNote(descs) {
  * Rendered by Claude Code, Codex, Pi, OpenCode, Cursor and Gemini as a small table.
  */
 export function lineupCard(descs) {
-  const rows = descs.map(
-    (d, i) => `| ${String.fromCharCode(65 + i)} | ${d.harness} | ${d.model ?? "default model"} | ${d.effortSupported ? (d.effort ?? "default") : "n/a"} |`,
-  );
-  return [
-    "**⚔️ argue lineup**",
-    "",
-    "| | Harness | Model | Effort |",
-    "|---|---|---|---|",
-    ...rows,
-    "",
-    "_Want another harness, a different model, or more or less effort? Just say so._",
-  ].join("\n");
+  const rows = descs.map((d) => `- **${d.model ?? "account default model"}** · effort ${d.effortSupported ? (d.effort ?? "default") : "n/a"} · ${d.harness}`);
+  return ["**⚔️ Arguing with:**", ...rows, "", "_Want different models? Stop me and say so._"].join("\n");
 }
 
 // ---------------------------------------------------------------- validation
@@ -271,7 +260,7 @@ export async function checkAgent(agent, { drivers = DRIVERS, installed }) {
  *   { agents?: "claude:opus,codex@high", reset?: true }
  * -> { lineup, source, note } | { saved: false, errors }
  */
-export async function manageLineup(root, { agents: spec, reset } = {}) {
+export async function manageLineup(root, { agents: spec, reset, save = true } = {}) {
   const config = loadConfig(root);
   const drivers = registry(config);
   const installed = await detect(drivers);
@@ -296,6 +285,12 @@ export async function manageLineup(root, { agents: spec, reset } = {}) {
   }
 
   const agents = parseAgents(spec, drivers);
+  if (!save) {
+    // A one-run override: show it, flag anything not installed, save nothing.
+    const missing = agents.filter((a) => !installed[a.kind]).map((a) => ({ agent: a.name, error: `${a.kind} is not installed` }));
+    if (missing.length) return { saved: false, errors: missing };
+    return view(agents, "this run only");
+  }
   if (agents.length < 2) throw new Error(`a lineup needs at least two agents (to pit one against itself: ${agents[0].kind},${agents[0].kind})`);
   if (agents.length > 8) throw new Error("at most 8 agents");
   const results = await Promise.all(agents.map((a) => checkAgent(a, { drivers, installed })));

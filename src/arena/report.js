@@ -1,5 +1,5 @@
-import { head } from "./exec.js";
-import { costText } from "./ui.js";
+import { head } from "../util/exec.js";
+import { costText } from "../util/ui.js";
 
 const esc = (s = "") => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
 

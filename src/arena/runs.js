@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { killPid, run as exec } from "./exec.js";
-import { writeJson } from "./fsx.js";
-import { applyPatch, diffFiles } from "./git.js";
+import { killPid, run as exec } from "../util/exec.js";
+import { writeJson } from "../util/fs.js";
+import { applyPatch, diffFiles } from "../workspace/git.js";
 
 /** Where runs for a project are stored. */
 export async function runsDir(cwd) {

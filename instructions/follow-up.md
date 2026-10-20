@@ -1,0 +1,9 @@
+Earlier, several AI models worked on a task and produced a final answer for the user. The user now has a follow-up question.
+
+THE FULL RECORD OF THAT WORK (each model's work, the critiques, and the final answer):
+{logbook}
+
+USER'S QUESTION:
+{question}
+
+Answer the question directly, using the record: what was considered, what evidence was found, and why the final answer went the way it did. If the record does not settle it, say so plainly and give your own best assessment. Do not mention models, rounds or this process unless the user asks about them.

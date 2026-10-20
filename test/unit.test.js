@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DRIVERS, customDriver, defaultJudge, defaultLineup, parseAgents, registry } from "../src/agents.js";
-import { modifiedTests, parseVerdict, stripVerdict } from "../src/argue.js";
-import { jsonLines, lastJsonObject } from "../src/exec.js";
-import { diffFiles, diffStats } from "../src/git.js";
-import { hasIssues, splitCritique, verdictOf } from "../src/prompts.js";
-import { stripTomlTable } from "../src/install.js";
+import { DRIVERS, customDriver, defaultJudge, defaultLineup, parseAgents, registry } from "../src/harnesses/index.js";
+import { modifiedTests, parseVerdict, stripVerdict } from "../src/arena/session.js";
+import { jsonLines, lastJsonObject } from "../src/util/exec.js";
+import { diffFiles, diffStats } from "../src/workspace/git.js";
+import { hasIssues, splitCritique, verdictOf } from "../src/instructions/index.js";
+import { stripTomlTable } from "../src/integrations/install.js";
 
 test("parseAgents: kind, model, effort, slashes and colons in models", () => {
   const a = parseAgents("claude:opus@high, codex, pi:openrouter/deepseek/deepseek-r1, opencode:anthropic/claude-sonnet-4");
@@ -18,7 +18,15 @@ test("parseAgents: kind, model, effort, slashes and colons in models", () => {
       ["opencode", "anthropic/claude-sonnet-4", undefined],
     ],
   );
-  assert.throws(() => parseAgents("nope"), /unknown agent/);
+  assert.throws(() => parseAgents("nope"), /unknown harness or model "nope"/);
+  assert.deepEqual(
+    parseAgents("opus@high,gpt-6.1-sol").map((a) => [a.kind, a.model, a.effort]),
+    [
+      ["claude", "opus", "high"],
+      ["codex", "gpt-6.1-sol", undefined],
+    ],
+    "bare models find their harness",
+  );
 });
 
 test("defaultLineup prefers vendor diversity, falls back to model diversity", () => {
@@ -126,7 +134,7 @@ test("windows: .cmd shims receive arguments with spaces, quotes and metacharacte
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { run } = await import("../src/exec.js");
+  const { run } = await import("../src/util/exec.js");
   const dir = mkdtempSync(join(tmpdir(), "argue-win-"));
   writeFileSync(join(dir, "echo.js"), "console.log(JSON.stringify(process.argv.slice(2)))");
   writeFileSync(join(dir, "fakecli.cmd"), `@node "${join(dir, "echo.js")}" %*\r\n`);
@@ -140,7 +148,7 @@ test("harnessDefaults reads each harness's own config", async () => {
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { harnessDefaults } = await import("../src/models.js");
+  const { harnessDefaults } = await import("../src/models/index.js");
   const home = mkdtempSync(join(tmpdir(), "argue-models-"));
   mkdirSync(join(home, ".codex"));
   writeFileSync(join(home, ".codex", "config.toml"), 'model = "gpt-6"\nmodel_reasoning_effort = "high"\n\n[profiles.x]\nmodel = "other"\n');
@@ -164,22 +172,19 @@ test("harnessDefaults reads each harness's own config", async () => {
 });
 
 test("describe, label and the lineup note", async () => {
-  const { describe, label, lineupNote } = await import("../src/models.js");
+  const { describe, label, lineupNote } = await import("../src/models/index.js");
   const env = { ANTHROPIC_MODEL: "" };
   const a = describe({ kind: "codex", name: "codex:gpt-6@low", model: "gpt-6", effort: "low" }, { env });
   assert.equal(label(a), "Codex · gpt-6 · effort low");
   const g = describe({ kind: "gemini", name: "gemini:gemini-2.5-pro", model: "gemini-2.5-pro" }, { env });
   assert.equal(label(g), "Gemini CLI · gemini-2.5-pro · effort n/a");
   const note = lineupNote([a, g]);
-  assert.equal(
-    note,
-    "argue mode will argue between Codex (gpt-6, effort low) and Gemini CLI (gemini-2.5-pro). To add another harness, change a model, or raise or lower effort, just say so.",
-  );
+  assert.equal(note, "Arguing with gpt-6 (effort low, Codex), gemini-2.5-pro (effort n/a, Gemini CLI). Want different models? Stop me and say so.");
   assert.doesNotMatch(note, /judge/i);
 });
 
 test("checkAgent validates effort without any CLI call", async () => {
-  const { checkAgent } = await import("../src/models.js");
+  const { checkAgent } = await import("../src/models/index.js");
   const installed = { gemini: "gemini", claude: "claude" };
   assert.match((await checkAgent(parseAgents("gemini@high")[0], { installed })).error, /no effort setting/);
   assert.match((await checkAgent(parseAgents("claude@turbo")[0], { installed })).error, /effort must be one of/);
@@ -188,15 +193,15 @@ test("checkAgent validates effort without any CLI call", async () => {
 });
 
 test("lineup card (for agents) and box (for the terminal) show harness, model and effort", async () => {
-  const { lineupCard } = await import("../src/models.js");
-  const { lineupBox } = await import("../src/ui.js");
+  const { lineupCard } = await import("../src/models/index.js");
+  const { lineupBox } = await import("../src/util/ui.js");
   const descs = [
     { harness: "Claude Code", model: "sonnet", effort: null, effortSupported: true },
     { harness: "Gemini CLI", model: null, effortSupported: false },
   ];
   const card = lineupCard(descs);
-  assert.match(card, /\| A \| Claude Code \| sonnet \| default \|/);
-  assert.match(card, /\| B \| Gemini CLI \| default model \| n\/a \|/);
+  assert.match(card, /- \*\*sonnet\*\* · effort default · Claude Code/);
+  assert.match(card, /- \*\*account default model\*\* · effort n\/a · Gemini CLI/);
   assert.doesNotMatch(card, /judge/i);
   const box = lineupBox(descs)
     .join("\n")
@@ -205,4 +210,48 @@ test("lineup card (for agents) and box (for the terminal) show harness, model an
   assert.match(box, /A {3}Claude Code {3}sonnet/);
   const widths = new Set(lineupBox(descs).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").length));
   assert.equal(widths.size, 1, "box lines line up");
+});
+
+test("guessMode: changes are code, questions and writing are answers", async () => {
+  const { guessMode } = await import("../src/cli/index.js");
+  assert.equal(guessMode("fix the flaky test in auth.spec.ts"), "code");
+  assert.equal(guessMode("add rate limiting to the login endpoint"), "code");
+  assert.equal(guessMode("which DB is best for a social media app"), "answer");
+  assert.equal(guessMode("Should we use Kafka or SQS?"), "answer");
+  assert.equal(guessMode("write a launch blog post"), "answer");
+  assert.equal(guessMode("how do I fix the memory leak?"), "answer", "a question about a fix is still a question");
+});
+
+test("harnessForModel maps bare model names to their harness", async () => {
+  const { harnessForModel } = await import("../src/harnesses/index.js");
+  assert.equal(harnessForModel("opus"), "claude");
+  assert.equal(harnessForModel("claude-sonnet-4-5"), "claude");
+  assert.equal(harnessForModel("gpt-6.1-sol"), "codex");
+  assert.equal(harnessForModel("o3"), "codex");
+  assert.equal(harnessForModel("gemini-2.5-pro"), "gemini");
+  assert.equal(harnessForModel("openrouter/deepseek/r1"), "pi");
+  assert.equal(harnessForModel("banana"), null);
+});
+
+test("parseVerdict reads the final step's pick and remaining disagreement", () => {
+  const pool = [
+    { id: "A", objections: 2 },
+    { id: "B", objections: 0 },
+  ];
+  assert.deepEqual(
+    [
+      parseVerdict('{"pick":"A","unresolved":"cost vs latency"}\nanswer', pool).winner,
+      parseVerdict('{"pick":"A","unresolved":"cost vs latency"}', pool).unresolved,
+    ],
+    ["A", "cost vs latency"],
+  );
+  assert.equal(parseVerdict('{"pick":"A","unresolved":"none"}', pool).unresolved, null);
+  assert.equal(stripVerdict('{"pick":"A","unresolved":"none"}\nThe answer.'), "The answer.");
+});
+
+test("scrubProcess removes candidate letters from the user's answer", async () => {
+  const { scrubProcess } = await import("../src/arena/session.js");
+  assert.equal(scrubProcess("Candidate B had the same fix but added tests."), "another approach had the same fix but added tests.");
+  assert.equal(scrubProcess("Model A's version was slower."), "another version was slower.");
+  assert.equal(scrubProcess("Use plan A for now."), "Use plan A for now.", "ordinary text is left alone");
 });

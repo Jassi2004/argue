@@ -1,7 +1,7 @@
 import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { isWin, run } from "./exec.js";
+import { isWin, run } from "../util/exec.js";
 
 // Identity + safety flags for argue's own internal commits (never in the user's repo history).
 const ID = ["-c", "user.name=argue", "-c", "user.email=argue@localhost", "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${isWin ? "NUL" : "/dev/null"}`];

@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { onPath } from "./config.js";
-import { writeAtomic } from "./fsx.js";
+import { onPath } from "../models/config.js";
+import { writeAtomic } from "../util/fs.js";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { run, which } from "./exec.js";
+import { PACKAGE_ROOT } from "../util/paths.js";
+import { run, which } from "../util/exec.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = PACKAGE_ROOT;
 const SKILL = readFileSync(join(ROOT, "skills", "argue", "SKILL.md"), "utf8");
 
 /**
