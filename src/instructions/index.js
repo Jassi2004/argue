@@ -9,7 +9,13 @@ import { fromRoot } from "../util/paths.js";
 const cache = new Map();
 export function load(name) {
   // Normalise Windows line endings so prompts are identical on every OS.
-  if (!cache.has(name)) cache.set(name, readFileSync(fromRoot("instructions", `${name}.md`), "utf8").replace(/\r\n/g, "\n").trim());
+  if (!cache.has(name))
+    cache.set(
+      name,
+      readFileSync(fromRoot("instructions", `${name}.md`), "utf8")
+        .replace(/\r\n/g, "\n")
+        .trim(),
+    );
   return cache.get(name);
 }
 
