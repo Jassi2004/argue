@@ -10,7 +10,7 @@ import { killAll, run } from "./exec.js";
 import { hasGit } from "./git.js";
 import { install } from "./install.js";
 import { startMcpServer, summarize } from "./mcp.js";
-import { describe, harnessDefaults, label, lineupNote, manageLineup } from "./models.js";
+import { describe, harnessDefaults, lineupNote, manageLineup } from "./models.js";
 import { markSetupDone, maybeOfferSetup } from "./setup.js";
 import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "./runs.js";
 import { bold, cyan, dim, green, lineupBox, printResult, progressPrinter, red, yellow } from "./ui.js";
