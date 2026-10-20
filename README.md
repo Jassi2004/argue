@@ -69,11 +69,12 @@ argue -f brief.md --rounds 3 --budget 5          # long brief, more rounds, $5 c
 argue "<task>" --bg                              # run in the background
 argue "<task>" --apply                           # apply the winner automatically
 
-argue watch                # follow the latest run
-argue apply [run]          # apply the winner
+argue watch                   # follow the latest run
+argue apply [run]             # apply the winner
 argue apply [run] --agent B   # …or another agent's version
-argue show [run]           # full report: scoreboard, debate, patch
-argue runs                 # history
+argue show [run]              # full report: scoreboard, debate, patch
+argue runs                    # history
+argue cancel [run]            # stop a run (also cleans up a run that was killed)
 ```
 
 Agent format: `agent[:model][@effort]`, e.g. `codex:gpt-5@high`, `pi:openrouter/deepseek/deepseek-r1`, `opencode:anthropic/claude-sonnet-4`.
@@ -117,12 +118,14 @@ Placeholders: `{prompt_file}`, `{cwd}`, `{model}`. The command's stdout is the a
 
 ## How it stays safe
 
-- Each agent works in a separate git worktree outside your project. Uncommitted and untracked files are included, so agents see what you see.
+- Each agent works in a separate git worktree outside your project. Uncommitted and untracked files are included, so agents see what you see. Absolute paths to your project in the task are pointed at each agent's own copy, and argue warns you if your project's files change during a run.
+- If an agent's revision breaks a solution that used to pass the check, argue keeps the earlier version.
+- Agents can't start nested argue runs.
 - Your repo's history is never touched, and nothing is committed to it. Run data lives in `.argue/`, which is git-ignored automatically.
 - Plain folders that aren't git repos are fine too; argue makes a private snapshot.
 - `node_modules` and virtualenvs are shared into each copy without being included in patches.
 - If an agent changes or deletes existing tests, it's flagged to the judge.
-- Ctrl-C stops every agent and cleans up.
+- Ctrl-C stops every agent and cleans up. If the argue process itself is killed, the next run (or `argue cancel`) stops leftover agents and removes their copies.
 - Cost: Claude Code, OpenCode and Pi report spend, and `--budget` is enforced on them. Codex, Gemini and Cursor bill your existing plans and only report tokens.
 
 ## MCP server

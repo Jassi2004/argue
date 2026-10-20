@@ -21,8 +21,9 @@ export const DRIVERS = {
     title: "Claude Code",
     bin: "claude",
     install: "npm i -g @anthropic-ai/claude-code",
-    async ask({ model, effort, prompt, cwd, write, timeoutMs, budgetUsd }) {
-      const args = ["-p", "--output-format", "json", "--no-session-persistence"];
+    async ask({ model, effort, prompt, cwd, write, timeoutMs, budgetUsd, protect = [] }) {
+      // --strict-mcp-config with no --mcp-config: no MCP servers (faster startup, and no nested argue).
+      const args = ["-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config"];
       args.push(
         ...(write
           ? ["--permission-mode", "acceptEdits", "--allowedTools", "Read,Edit,Write,MultiEdit,Glob,Grep,Bash,TodoWrite"]
@@ -31,6 +32,9 @@ export const DRIVERS = {
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
       if (budgetUsd > 0) args.push("--max-budget-usd", budgetUsd.toFixed(2));
+      // Belt and braces: never let file tools write to the user's real project, only to this copy.
+      const deny = protect.flatMap((p) => [`Edit(/${p}/**)`, `Write(/${p}/**)`, `MultiEdit(/${p}/**)`, `NotebookEdit(/${p}/**)`]);
+      if (deny.length) args.push("--settings", JSON.stringify({ permissions: { deny } }));
       const res = await run("claude", args, { cwd, input: prompt, timeoutMs });
       const json = lastJsonObject(res.stdout);
       if (!json || json.type !== "result") return fail(res);

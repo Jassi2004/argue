@@ -6,8 +6,24 @@ import { isWin, run } from "./exec.js";
 // Identity + safety flags for argue's own internal commits (never in the user's repo history).
 const ID = ["-c", "user.name=argue", "-c", "user.email=argue@localhost", "-c", "commit.gpgsign=false", "-c", `core.hooksPath=${isWin ? "NUL" : "/dev/null"}`];
 
+/** Stable, locale/config-independent git output for parsing. */
+const SAFE = [
+  "-c",
+  "core.quotepath=false",
+  "-c",
+  "core.autocrlf=false",
+  "-c",
+  "core.safecrlf=false",
+  "-c",
+  "diff.noprefix=false",
+  "-c",
+  "diff.mnemonicprefix=false",
+  "-c",
+  "color.ui=false",
+];
+
 async function git(cwd, ...args) {
-  const res = await run("git", args, { cwd });
+  const res = await run("git", [...SAFE, ...args], { cwd });
   if (res.code !== 0)
     throw new Error(
       `git ${args
@@ -45,6 +61,7 @@ export async function openWorkspace(cwd, scratch) {
   const shared = SHARED_DIRS.filter((d) => existsSync(join(source, d)));
 
   if (top && hasHead) {
+    // `stash create` snapshots staged + unstaged tracked changes without touching the working tree or stash list.
     const base = (await git(top, "stash", "create")) || (await git(top, "rev-parse", "HEAD"));
     const untracked = (await git(top, "ls-files", "--others", "--exclude-standard", "-z")).split("\0").filter(Boolean);
     return { root: top, source, home: top, isRepo: true, base, untracked, shared };
@@ -154,7 +171,7 @@ async function addWorktreeNow(ws, path) {
 /** Reset a worktree back to `start`, keeping the symlinked shared folders. */
 export async function resetWorktree(ws, path, start) {
   await git(path, "reset", "-q", "--hard", start);
-  await git(path, "clean", "-fdq", ...ws.shared.flatMap((d) => ["-e", `/${d}`]));
+  await git(path, "clean", "-fdq", "-e", "/.argue", ...ws.shared.flatMap((d) => ["-e", `/${d}`]));
 }
 
 export function removeWorktree(ws, path) {
@@ -164,10 +181,11 @@ export function removeWorktree(ws, path) {
   });
 }
 
-/** Everything changed in a worktree since `start` (new, deleted, binary files included). */
+/** Everything changed in a worktree since `start` (new, deleted, renamed, binary files included). */
 export async function diffSince(ws, path, start) {
   await stageAll(ws, path);
-  const res = await run("git", ["diff", "--cached", "--binary", "--no-color", "--no-ext-diff", start], { cwd: path });
+  const res = await run("git", [...SAFE, "diff", "--cached", "--binary", "--no-color", "--no-ext-diff", "--no-renames", start], { cwd: path });
+  if (res.code !== 0) throw new Error(`git diff: ${res.stderr.trim()}`);
   return res.stdout;
 }
 
@@ -183,25 +201,75 @@ export function diffStats(diff = "") {
   return { files, add, del };
 }
 
-/** Changed file paths in a patch. */
+/** Changed file paths in a patch (handles spaces, quoting and deleted files). */
 export function diffFiles(diff = "") {
   const files = [];
-  for (const m of diff.matchAll(/^diff --git a\/(.+?) b\//gm)) files.push(m[1]);
+  for (const block of diff.split(/^diff --git /m).slice(1)) {
+    const plus = block.match(/^\+\+\+ (?:b\/)?(.+?)\t?$/m)?.[1];
+    const minus = block.match(/^--- (?:a\/)?(.+?)\t?$/m)?.[1];
+    let file = plus && plus !== "/dev/null" ? plus : minus && minus !== "/dev/null" ? minus : null;
+    if (!file) {
+      // Binary or mode-only change has no ---/+++ lines; the header is `a/X b/X` (or quoted) with X repeated.
+      const head = block.split("\n")[0].trimEnd();
+      const quoted = head.match(/^"a\/((?:\\.|[^"\\])*)" /);
+      file = quoted ? `"${quoted[1]}"` : head.slice(2, 2 + (head.length - 5) / 2);
+    }
+    files.push(unquote(file));
+  }
   return files;
 }
 
-/** Apply a patch to the user's project (repo or plain folder). */
-export async function applyPatch(target, patchFile) {
-  let last = "";
-  for (const args of [
-    ["apply", "--whitespace=nowarn"],
-    ["apply", "--3way", "--whitespace=nowarn"],
-  ]) {
-    const res = await run("git", [...args, patchFile], { cwd: target });
-    if (res.code === 0) return;
-    last = (res.stderr || res.stdout).trim();
+function unquote(s) {
+  if (!s.startsWith('"')) return s;
+  try {
+    // git C-style quoting with octal escapes for non-ASCII bytes.
+    const bytes = [];
+    const body = s.slice(1, -1);
+    for (let i = 0; i < body.length; i++) {
+      if (body[i] !== "\\") {
+        bytes.push(...Buffer.from(body[i]));
+        continue;
+      }
+      const n = body[++i];
+      if (/[0-7]/.test(n)) {
+        bytes.push(parseInt(body.slice(i, i + 3), 8));
+        i += 2;
+      } else bytes.push({ n: 10, t: 9, r: 13, '"': 34, "\\": 92 }[n] ?? n.charCodeAt(0));
+    }
+    return Buffer.from(bytes)
+      .toString("utf8")
+      .replace(/^[ab]\//, "");
+  } catch {
+    return s;
   }
-  throw new Error(`patch did not apply cleanly (did the files change meanwhile?): ${last.split("\n").slice(0, 2).join(" ")}`);
+}
+
+/**
+ * Apply a patch to the user's project (git repo root or plain folder).
+ * Checks first so a patch is applied fully or not at all; falls back to a 3-way merge in repos.
+ */
+export async function applyPatch(target, patchFile) {
+  if (!existsSync(patchFile)) throw new Error(`patch not found: ${patchFile}`);
+  if (!readFileSync(patchFile, "utf8").trim()) throw new Error("patch is empty");
+  const inRepo = (await run("git", ["rev-parse", "--show-toplevel"], { cwd: target })).code === 0;
+  // In a plain folder git apply works on paths relative to cwd; in a repo it must run from the root.
+  const cwd = inRepo ? await git(target, "rev-parse", "--show-toplevel") : target;
+  const base = ["apply", "--whitespace=nowarn"];
+  const check = await run("git", [...SAFE, ...base, "--check", patchFile], { cwd });
+  if (check.code === 0) {
+    await git(cwd, ...base, patchFile);
+    return;
+  }
+  if (inRepo) {
+    const merged = await run("git", [...SAFE, ...base, "--3way", patchFile], { cwd });
+    if (merged.code === 0) return;
+    throw new Error(`patch conflicts with your current files: ${firstLines(merged.stderr || merged.stdout)}`);
+  }
+  throw new Error(`patch does not apply to your current files (did they change since the run started?): ${firstLines(check.stderr)}`);
+}
+
+function firstLines(s = "") {
+  return s.trim().split("\n").slice(0, 3).join(" | ");
 }
 
 /** Keep .argue/ out of `git status` in the user's repo, without editing their .gitignore. */

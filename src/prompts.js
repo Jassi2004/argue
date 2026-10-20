@@ -4,7 +4,7 @@ const RULES = `You are one of several independent AI agents competing on the sam
 Ground rules:
 - Correctness beats cleverness. Verify claims by reading the code and running commands where you can.
 - Never ask the user questions; make reasonable assumptions and state them.
-- Work only inside the current directory. Put any scratch files (repro scripts, notes) here, never in /tmp or elsewhere.
+- The current directory is your own private copy of the project. Work only inside it: any path in the task that points at the project means this copy. Put scratch files (repro scripts, notes) here, never in /tmp or elsewhere.
 - Do not modify the .argue/ folder; only read files in it that you are pointed to.`;
 
 const checkLine = (check) => (check ? `Acceptance check (run automatically in your copy afterwards): \`${check}\`\n` : "");
@@ -48,13 +48,13 @@ You are in a scratch copy of the original (unmodified) repository. You may apply
 Find real problems: bugs, missed requirements, broken edge cases, regressions, security issues. Ignore style nitpicks.
 A claim backed by a failing test or command output counts far more than an opinion. Do not invent problems; if a solution is solid, say so.
 
-Reply with one section per rival, exactly in this format:
+Reply with exactly one section per rival (${rivals.map((r) => r.id).join(", ")}), in this format:
 
-## ${rivals[0]?.id ?? "B"}
-VERDICT: OK | ISSUES
-- <issue>: <why, with file:line> — evidence: <command + result, or "unverified">
-
-(repeat for each rival)`;
+## <letter>
+VERDICT: OK
+or
+VERDICT: ISSUES
+- <issue>: <why, with file:line> — evidence: <command + result, or "unverified">`;
 }
 
 export function reviseCode({ task, check, feedback, checkResult, ctx }) {
@@ -82,8 +82,8 @@ export function judgeCode({ task, check, candidates, ctx }) {
       (c) => `### Candidate ${c.id}
 Patch: \`${c.patchFile}\` (${c.stats.files} files, +${c.stats.add}/-${c.stats.del})
 Acceptance check: ${c.check ? (c.check.pass ? "PASSED" : "FAILED") : "none"}
-Unresolved reviewer objections: ${c.objections}${c.testEdits?.length ? `\nModified pre-existing test files: ${c.testEdits.join(", ")} (inspect: adding tests is fine, weakening or deleting existing assertions is disqualifying)` : ""}
-Author's summary: ${oneParagraph(c.summary)}`,
+Reviewer objections in the last critique round: ${c.objections}${c.revisedAfter ? " (the author revised afterwards; check whether they still hold)" : ""}${c.testEdits?.length ? `\nModified pre-existing test files: ${c.testEdits.join(", ")} (inspect: adding tests is fine, weakening or deleting existing assertions is disqualifying)` : ""}
+Author's summary: ${oneParagraph(c.summary) || "(none)"}`,
     )
     .join("\n\n");
   return `You are the impartial judge of a coding competition between AI agents. You did not write any of these solutions.
@@ -95,9 +95,13 @@ ${checkLine(check)}
 ${list}
 
 Read every patch file carefully (you are in a copy of the original repository, so you can compare against the original code).
-Decide which single candidate best solves the task. Rank by: correctness, then completeness against the task, then safety (no unrelated or risky changes), then simplicity.
+Decide which single candidate best solves the task. Rank by:
+1. Correctness: does it actually work, including the edge cases the task implies? Verify claims yourself (apply a patch with \`git apply <patch>\`, run tests, write a quick repro); undo with \`git apply -R <patch>\`.
+2. Completeness against what the user asked for.
+3. Safety: no risky or unrelated changes. Robustness the task calls for (validation, edge cases it mentions) is completeness, not scope creep.
+4. Simplicity and readability.
 A passing acceptance check is strong evidence; do not pick a failing candidate if a passing one exists.
-Extra tests that prove the change are a plus, not scope creep. Weakening existing tests to pass the check is disqualifying.
+Extra tests that prove the change are a plus. Weakening existing tests to pass the check is disqualifying.
 
 Reply with ONLY this JSON object:
 {"winner": "<id>", "ranking": ["<id>", ...], "reason": "<2-4 sentences>", "risks": "<remaining risks or 'none'>"}`;
@@ -129,10 +133,12 @@ ${body}
 
 Check each answer against the actual code (you have read-only access). Find factual errors, flawed reasoning, missed cases, and better alternatives. Do not invent problems.
 
-Reply with one section per rival, exactly in this format:
+Reply with exactly one section per rival (${rivals.map((r) => r.id).join(", ")}), in this format:
 
-## ${rivals[0]?.id ?? "B"}
-VERDICT: OK | ISSUES
+## <letter>
+VERDICT: OK
+or
+VERDICT: ISSUES
 - <issue>: <why, with evidence from the code>`;
 }
 
@@ -152,7 +158,9 @@ Verify each point against the code. Produce your improved, complete answer (not 
 }
 
 export function judgeAsk({ task, candidates, ctx }) {
-  const body = candidates.map((c) => `## Answer ${c.id}\nUnresolved objections: ${c.objections}\n\n${c.summary}`).join("\n\n");
+  const body = candidates
+    .map((c) => `## Answer ${c.id}\nReviewer objections in the last round: ${c.objections}${c.revisedAfter ? " (revised afterwards)" : ""}\n\n${c.summary}`)
+    .join("\n\n");
   return `You are the impartial judge of a debate between AI agents. You wrote none of these answers.
 
 QUESTION / TASK:
@@ -179,7 +187,7 @@ export const ANGLES = [
 /** Split a critique into per-rival sections keyed by id ("## B" headings). */
 export function splitCritique(text = "", ids = []) {
   const out = {};
-  const re = /^#{1,3}\s*(?:Solution|Answer|Candidate)?\s*([A-Z])\b.*$/gm;
+  const re = /^\s*(?:#{1,4}\s*|\*\*)\s*(?:Solution|Answer|Candidate|Rival)?\s*([A-Z])\b(?!['’])[^\n]*$/gm;
   const marks = [...text.matchAll(re)].filter((m) => ids.includes(m[1]));
   if (!marks.length) {
     for (const id of ids) out[id] = text.trim();
@@ -194,7 +202,8 @@ export function splitCritique(text = "", ids = []) {
 
 /** Reviewer verdict for one section: "ok", "issues", or null when the reviewer gave no readable verdict. */
 export function verdictOf(section = "") {
-  const m = [...String(section).matchAll(/VERDICT\W{0,5}\s*(OK|ISSUES)\b/gi)].at(-1);
+  const all = [...String(section).matchAll(/VERDICT\W{0,5}\s*(OK|ISSUES)\b(\s*\|\s*(?:OK|ISSUES))?/gi)].filter((m) => !m[2]);
+  const m = all.at(-1);
   return m ? (m[1].toUpperCase() === "OK" ? "ok" : "issues") : null;
 }
 

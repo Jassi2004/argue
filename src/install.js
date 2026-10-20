@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { writeAtomic } from "./fsx.js";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,9 +72,11 @@ export function targets(home = homedir()) {
         return ["claude mcp (user scope)"];
       },
       uninstall: async () => {
-        if (await which("claude")) await run("claude", ["mcp", "remove", "-s", "user", "argue"], { env: { HOME: home } });
-        else mergeJson(join(home, ".claude.json"), (j) => delete j.mcpServers?.argue);
-        return ["claude mcp"];
+        if (await which("claude")) {
+          const res = await run("claude", ["mcp", "remove", "-s", "user", "argue"], { env: { HOME: home } });
+          return res.code === 0 ? ["claude mcp"] : [];
+        }
+        return removeKey(join(home, ".claude.json"), ["mcpServers", "argue"]);
       },
     },
     {
@@ -85,12 +88,16 @@ export function targets(home = homedir()) {
         const file = join(home, ".codex", "config.toml");
         const toml = existsSync(file) ? readFileSync(file, "utf8") : "";
         const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\ndefault_tools_approval_mode = "writes"\n\n[mcp_servers.argue.tools.argue_start]\napproval_mode = "approve"\n\n[mcp_servers.argue.tools.argue_cancel]\napproval_mode = "approve"\n\n[mcp_servers.argue.env]\nPATH = ${JSON.stringify(env.PATH)}\n`;
-        writeFileSync(file, `${stripTomlTable(toml, "mcp_servers.argue").trimEnd()}\n\n${block}`.replace(/^\n+/, ""));
+        writeAtomic(file, `${stripTomlTable(toml, "mcp_servers.argue").trimEnd()}\n\n${block}`.replace(/^\n+/, ""));
         return [file];
       },
       uninstall: () => {
         const file = join(home, ".codex", "config.toml");
-        if (existsSync(file)) writeFileSync(file, `${stripTomlTable(readFileSync(file, "utf8"), "mcp_servers.argue").trimEnd()}\n`);
+        if (!existsSync(file)) return [];
+        const toml = readFileSync(file, "utf8");
+        const next = stripTomlTable(toml, "mcp_servers.argue");
+        if (next === toml) return [];
+        writeAtomic(file, `${next.trimEnd()}\n`);
         return [file];
       },
     },
@@ -102,7 +109,7 @@ export function targets(home = homedir()) {
         const { command, args, env } = await mcpCommand();
         return mergeJson(join(home, ".cursor", "mcp.json"), (j) => ((j.mcpServers ??= {}).argue = { command, args, env }));
       },
-      uninstall: () => mergeJson(join(home, ".cursor", "mcp.json"), (j) => delete j.mcpServers?.argue),
+      uninstall: () => removeKey(join(home, ".cursor", "mcp.json"), ["mcpServers", "argue"]),
     },
     {
       id: "gemini",
@@ -123,8 +130,7 @@ export function targets(home = homedir()) {
         return [...files, cmd];
       },
       uninstall: () => {
-        rmSync(join(home, ".gemini", "commands", "argue.toml"), { force: true });
-        return mergeJson(join(home, ".gemini", "settings.json"), (j) => delete j.mcpServers?.argue);
+        return [...removeFile(join(home, ".gemini", "commands", "argue.toml")), ...removeKey(join(home, ".gemini", "settings.json"), ["mcpServers", "argue"])];
       },
     },
     {
@@ -143,8 +149,7 @@ export function targets(home = homedir()) {
         return [...files, cmd];
       },
       uninstall: () => {
-        rmSync(join(cfg, "opencode", "commands", "argue.md"), { force: true });
-        return mergeJson(join(cfg, "opencode", "opencode.json"), (j) => delete j.mcp?.argue);
+        return [...removeFile(join(cfg, "opencode", "commands", "argue.md")), ...removeKey(join(cfg, "opencode", "opencode.json"), ["mcp", "argue"])];
       },
     },
     {
@@ -157,17 +162,17 @@ export function targets(home = homedir()) {
         writeFileSync(file, `---\ndescription: Run a task through multiple competing AI agents (argue)\n---\n${SLASH_PROMPT.replace("$ARGS", "$@")}\n`);
         return [file];
       },
-      uninstall: () => {
-        const file = join(home, ".pi", "agent", "prompts", "argue.md");
-        rmSync(file, { force: true });
-        return [file];
-      },
+      uninstall: () => removeFile(join(home, ".pi", "agent", "prompts", "argue.md")),
     },
   ];
 }
 
-/** Read-modify-write a JSON config file; creates it if missing. Refuses to clobber invalid JSON. */
-export function mergeJson(file, mutate) {
+/**
+ * Read-modify-write a JSON config file. Creates it if missing (unless `removing`).
+ * Refuses to touch files it cannot parse. Only writes when something changed.
+ */
+export function mergeJson(file, mutate, { removing = false } = {}) {
+  if (removing && !existsSync(file)) return [];
   let data = {};
   if (existsSync(file)) {
     const raw = readFileSync(file, "utf8");
@@ -183,9 +188,26 @@ export function mergeJson(file, mutate) {
       }
     }
   }
+  const before = JSON.stringify(data);
   mutate(data);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+  if (JSON.stringify(data) === before) return removing ? [] : [file];
+  writeAtomic(file, `${JSON.stringify(data, null, 2)}\n`);
+  return [file];
+}
+
+const removeKey = (file, path) =>
+  mergeJson(
+    file,
+    (j) => {
+      const parent = path.slice(0, -1).reduce((o, k) => o?.[k], j);
+      if (parent && typeof parent === "object") delete parent[path.at(-1)];
+    },
+    { removing: true },
+  );
+
+function removeFile(file) {
+  if (!existsSync(file)) return [];
+  rmSync(file, { force: true });
   return [file];
 }
 
@@ -200,7 +222,10 @@ export function stripTomlTable(toml, name) {
   let skipping = false;
   for (const line of lines) {
     const header = line.match(/^\s*\[+\s*([^\]]+?)\s*\]+\s*(#.*)?$/);
-    if (header) skipping = header[1] === name || header[1].startsWith(`${name}.`);
+    if (header) {
+      const key = header[1].replace(/\s*\.\s*/g, ".").replace(/"([^"]*)"/g, "$1");
+      skipping = key === name || key.startsWith(`${name}.`);
+    }
     if (!skipping) out.push(line);
   }
   return out.join("\n");
@@ -216,7 +241,8 @@ export async function install({ only, home, uninstall: remove = false } = {}) {
     }
     try {
       const files = await (remove ? t.uninstall() : t.install());
-      results.push({ id: t.id, title: t.title, status: remove ? "removed" : "installed", detail: files.join(", ") });
+      if (remove && !files.length) results.push({ id: t.id, title: t.title, status: "skipped", detail: "not installed" });
+      else results.push({ id: t.id, title: t.title, status: remove ? "removed" : "installed", detail: files.join(", ") });
     } catch (err) {
       results.push({ id: t.id, title: t.title, status: "error", detail: err.message });
     }

@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { detect, registry } from "./agents.js";
-import { startDetached, waitForFinish, waitForRun } from "./background.js";
+import { startDetached, waitForFinish, waitForStart } from "./background.js";
 import { loadConfig } from "./config.js";
-import { applyPatch } from "./git.js";
-import { findRun, listRuns, readEvents, requestCancel } from "./runs.js";
+import { run } from "./exec.js";
+import { applyRun, findRun, listRuns, readEvents, reap, requestCancel } from "./runs.js";
 import { VERSION } from "./version.js";
 
 /**
@@ -15,6 +16,8 @@ import { VERSION } from "./version.js";
  *   argue_wait   -> blocks up to ~50s, returns live progress, or the final result when done
  *   argue_apply  -> applies the winning patch
  */
+const SUPPORTED = ["2025-06-18", "2025-11-25", "2025-03-26", "2024-11-05"];
+
 const TOOLS = [
   {
     name: "argue_start",
@@ -109,6 +112,9 @@ export function startMcpServer({ input = process.stdin, output = process.stdout 
     }
   });
   input.on("end", () => process.exit(0));
+  // Never let a stray error kill the server (the host would lose all argue tools).
+  process.on("uncaughtException", (err) => process.stderr.write(`argue mcp: ${err.stack ?? err}\n`));
+  process.on("unhandledRejection", (err) => process.stderr.write(`argue mcp: ${err?.stack ?? err}\n`));
 }
 
 async function handle(line, send) {
@@ -132,7 +138,7 @@ async function dispatch(method, params, progress) {
   switch (method) {
     case "initialize":
       return {
-        protocolVersion: params.protocolVersion ?? "2025-06-18",
+        protocolVersion: SUPPORTED.includes(params.protocolVersion) ? params.protocolVersion : SUPPORTED[0],
         capabilities: { tools: {} },
         serverInfo: { name: "argue", title: "argue", version: VERSION },
         instructions:
@@ -163,29 +169,30 @@ async function dispatch(method, params, progress) {
 
 export async function callTool(name, a, progressToken, progress = () => {}) {
   const cwd = a.cwd || process.cwd();
+  if (!isAbsolute(cwd)) throw new Error(`cwd must be an absolute path (got "${cwd}")`);
+  if (!existsSync(cwd)) throw new Error(`cwd does not exist: ${cwd}`);
+  if (name !== "argue_start" && name !== "argue_runs" && name !== "argue_agents" && !a.run_id) throw new Error("run_id is required");
   switch (name) {
     case "argue_start": {
-      if (!a.task) throw new Error("task is required");
-      const args = [a.task, "--json"];
+      if (Number(process.env.ARGUE_DEPTH || 0) > 0) throw new Error("you are an agent inside an argue run; nested argue runs are not allowed");
+      if (!a.task || !String(a.task).trim()) throw new Error("task is required");
+      if (a.mode && !["code", "ask"].includes(a.mode)) throw new Error('mode must be "code" or "ask"');
+      // The task goes through a file so its text is never parsed as CLI flags.
+      const taskFile = join(tmpdir(), `argue-task-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+      writeFileSync(taskFile, String(a.task));
+      const args = ["-f", taskFile, "--json"];
       if (a.mode) args.push("--mode", a.mode);
       if (a.agents) args.push("--agents", a.agents);
       if (a.judge) args.push("--judge", a.judge);
       if (a.check) args.push("--check", a.check);
-      if (a.rounds) args.push("--rounds", String(a.rounds));
-      if (a.budget) args.push("--budget", String(a.budget));
-      if (a.context) args.push("--context", a.context);
+      if (a.rounds != null) args.push("--rounds", String(a.rounds));
+      if (a.budget != null) args.push("--budget", String(a.budget));
+      if (a.context) args.push(`--context=${a.context}`);
       if (a.apply) args.push("--apply");
-      const { runId, log } = startDetached({ cwd, args });
-      const run = await waitForRun(cwd, runId);
-      if (!run) {
-        let tailLog = "";
-        try {
-          tailLog = readFileSync(log, "utf8").trim().split("\n").slice(-5).join("\n");
-        } catch {}
-        throw new Error(`run failed to start${tailLog ? `: ${tailLog}` : ""}`);
-      }
+      const started = startDetached({ cwd, args });
+      const run = await waitForStart(cwd, started);
       return {
-        run_id: runId,
+        run_id: started.runId,
         status: "running",
         agents: run.meta.agents,
         judge: run.meta.judge,
@@ -205,15 +212,15 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
       }
     }
     case "argue_apply": {
-      const run = await findRun(cwd, a.run_id);
-      if (run.status !== "done") throw new Error(`run is ${run.status}`);
-      if (run.result.mode !== "code") throw new Error("ask-mode runs have no patch");
-      const file = a.agent ? join(run.path, `${String(a.agent).toUpperCase()}.patch`) : run.result.patch;
-      await applyPatch(run.result.project, file);
-      return { applied: true, patch: file, files: run.result.files };
+      const { label, file, files } = await applyRun(cwd, a.run_id, a.agent);
+      return { applied: true, what: label, patch: file, files };
     }
     case "argue_cancel": {
       const run = await findRun(cwd, a.run_id);
+      if (run.status === "interrupted") {
+        await reap(run);
+        return { status: "interrupted", cleaned_up: true };
+      }
       if (run.status !== "running") return { status: run.status };
       await requestCancel(run);
       return { status: "cancelled" };
@@ -221,7 +228,8 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
     case "argue_runs":
       return (await listRuns(cwd)).slice(0, 20).map((r) => ({ run_id: r.id, status: r.status, task: r.meta.task, winner: r.result?.winner?.agent ?? null }));
     case "argue_agents": {
-      const drivers = registry(loadConfig(cwd));
+      const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
+      const drivers = registry(loadConfig(top.code === 0 ? top.stdout.trim() : cwd));
       const found = await detect(drivers);
       return Object.entries(drivers).map(([kind, d]) => ({ agent: kind, name: d.title, installed: Boolean(found[kind]), install: d.install }));
     }

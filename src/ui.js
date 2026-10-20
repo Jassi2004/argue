@@ -18,11 +18,9 @@ const PHASE = {
 
 /** Returns an onEvent handler that prints progress to `write`. */
 export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`)) {
-  const names = {};
   return (e) => {
     switch (e.type) {
       case "start":
-        for (const a of e.agents) names[a.id] = a.agent;
         write(`${bold("argue")} ${dim(e.runId)}`);
         write(`  ${dim("task")}    ${trim(e.task)}`);
         write(`  ${dim("agents")}  ${e.agents.map((a) => `${cyan(a.id)} ${a.agent}`).join("   ")}   ${dim(`judge: ${e.judge}`)}`);
@@ -56,6 +54,12 @@ export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`)) {
       case "note":
         write(`  ${dim(`→ ${e.text}`)}`);
         break;
+      case "warning":
+        write(`  ${yellow(`⚠ ${e.text}`)}`);
+        break;
+      case "error":
+        write(`\n${red("✗ failed:")} ${e.message}`);
+        break;
     }
   };
 }
@@ -65,7 +69,7 @@ export function printResult(r, write = (s) => process.stdout.write(`${s}\n`)) {
   write(`${green("🏆 winner")}  ${cyan(r.winner.id)} ${bold(r.winner.agent)}`);
   if (r.reason) write(`${dim("   why")}     ${r.reason}`);
   if (r.risks && r.risks !== "none") write(`${dim("   risks")}   ${r.risks}`);
-  write(`${dim("   cost")}    ${r.costUsd ? `$${r.costUsd}` : "n/a"} · ${r.tokens.toLocaleString("en-US")} tokens · ${r.calls} calls`);
+  write(`${dim("   cost")}    ${costText(r.costUsd)} · ${r.tokens.toLocaleString("en-US")} tokens · ${r.calls} calls`);
   if (r.mode === "code") {
     write(`${dim("   files")}   ${r.files.join(", ") || "(none)"}`);
     if (r.applied) write(`${green("   ✓ applied to your working tree")}`);
@@ -79,6 +83,11 @@ export function printResult(r, write = (s) => process.stdout.write(`${s}\n`)) {
     write("");
   }
   write(`${dim("   report")}  ${r.report}`);
+}
+
+/** Dollar amount as reported by CLIs that report cost (others bill your plan and only report tokens). */
+export function costText(usd) {
+  return usd ? `$${usd.toFixed(2)}` : "$0 reported (Codex/Gemini/Cursor bill your plan)";
 }
 
 function trim(s = "", n = 110) {

@@ -14,7 +14,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/unit.test.js test/integration.test.js"
+    "test": "node --test test/unit.test.js test/integration.test.js",
+    "lint": "npx -y -p eslint@9 -p @eslint/js@9 -p globals@16 eslint src bin test && npx -y prettier@3 --check src bin test",
+    "format": "npx -y prettier@3 --write src bin test"
   },
   "engines": {
     "node": ">=20"

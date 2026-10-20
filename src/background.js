@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,22 +22,47 @@ export function startDetached({ cwd, args }) {
     detached: true,
     stdio: ["ignore", log, log],
     windowsHide: true,
-    env: { ...process.env, ARGUE_BACKGROUND: "1" },
   });
+  let exited = false;
+  child.on("exit", () => (exited = true));
   child.unref();
-  return { runId, log: join(logDir, `${runId}.log`) };
+  closeSync(log);
+  return { runId, log: join(logDir, `${runId}.log`), exited: () => exited };
 }
 
-/** Wait until the run's folder exists (the child creates it after setup), up to `ms`. */
-export async function waitForRun(cwd, runId, ms = 60000) {
+/**
+ * Wait until the background run has registered itself, or failed to start.
+ * Returns the run, or throws with the child's own error message.
+ */
+export async function waitForStart(cwd, started, ms = 60000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     try {
-      return await findRun(cwd, runId);
+      return await findRun(cwd, started.runId);
     } catch {}
-    await sleep(300);
+    if (started.exited()) {
+      await sleep(200);
+      try {
+        return await findRun(cwd, started.runId);
+      } catch {}
+      throw new Error(`run failed to start: ${logTail(started.log) || "unknown error"}`);
+    }
+    await sleep(200);
   }
-  return null;
+  throw new Error(`run did not start within ${ms / 1000}s; see ${started.log}`);
+}
+
+function logTail(file) {
+  try {
+    return readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .slice(-5)
+      .join("\n")
+      .replace(/^argue: /gm, "");
+  } catch {
+    return "";
+  }
 }
 
 /** Long-poll a run until it finishes or `seconds` pass. */

@@ -1,4 +1,5 @@
 import { head } from "./exec.js";
+import { costText } from "./ui.js";
 
 const esc = (s = "") => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
 
@@ -8,7 +9,7 @@ export function renderReport({ result, players, transcript }) {
   out.push(`# argue · ${r.runId}`, "");
   out.push(`**Task:** ${r.task}`, "");
   out.push(
-    `**Mode:** ${r.mode}${r.check ? ` · **Check:** \`${r.check}\`` : ""} · **Rounds:** ${r.rounds} · **Cost:** $${r.costUsd} · **Tokens:** ${r.tokens.toLocaleString("en-US")}`,
+    `**Mode:** ${r.mode}${r.check ? ` · **Check:** \`${r.check}\`` : ""} · **Rounds:** ${r.rounds} · **Cost:** ${costText(r.costUsd)} · **Tokens:** ${r.tokens.toLocaleString("en-US")}`,
     "",
   );
   out.push(`## Winner: ${r.winner.id} (${r.winner.agent})`, "", r.reason || "", "", `**Risks:** ${r.risks || "none noted"}`, "");
@@ -43,7 +44,9 @@ export function renderReport({ result, players, transcript }) {
     );
   if (r.mode === "code") {
     const w = players.find((p) => p.id === r.winner.id);
-    out.push("## Winning patch", "", "```diff", head(w?.diff ?? "", 60000), "```", "");
+    const diff = head(w?.diff ?? "", 60000);
+    const fence = "`".repeat(Math.max(3, ...[...diff.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+    out.push("## Winning patch", "", `${fence}diff`, diff, fence, "");
   }
   return out.join("\n");
 }

@@ -1,15 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { defaultJudge, defaultLineup, detect, parseAgents, registry } from "./agents.js";
 import { argue } from "./argue.js";
-import { startDetached, waitForFinish, waitForRun } from "./background.js";
+import { startDetached, waitForFinish, waitForStart } from "./background.js";
 import { detectCheck, loadConfig, userConfigPath, writeConfig } from "./config.js";
-import { killAll } from "./exec.js";
-import { applyPatch, hasGit } from "./git.js";
+import { killAll, run } from "./exec.js";
+import { hasGit } from "./git.js";
 import { install } from "./install.js";
 import { startMcpServer, summarize } from "./mcp.js";
-import { findRun, listRuns, readEvents, requestCancel } from "./runs.js";
+import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "./runs.js";
 import { bold, cyan, dim, green, printResult, progressPrinter, red, yellow } from "./ui.js";
 import { VERSION } from "./version.js";
 
@@ -22,7 +23,7 @@ ${bold("Usage")}
   argue show [run]                 print a run's report
   argue runs                       list runs in this project
   argue watch [run]                follow a running run's progress
-  argue wait [run] [-t secs]       wait up to N seconds (default 240), print status JSON (for agents)
+  argue wait [run] [--seconds N]   wait up to N seconds (default 240), print status JSON (for agents)
   argue cancel [run]               stop a running run
   argue doctor                     check which agent CLIs are installed
   argue init                       set default agents for your machine
@@ -65,12 +66,12 @@ const OPTIONS = {
   context: { type: "string" },
   agent: { type: "string" },
   "run-id": { type: "string" },
+  seconds: { type: "string" },
   apply: { type: "boolean" },
   bg: { type: "boolean" },
   keep: { type: "boolean" },
   json: { type: "boolean" },
   quiet: { type: "boolean" },
-  yes: { type: "boolean", short: "y" },
   version: { type: "boolean", short: "v" },
   help: { type: "boolean", short: "h" },
 };
@@ -80,7 +81,7 @@ const COMMANDS = new Set(["apply", "show", "runs", "watch", "wait", "cancel", "d
 export async function main(argv) {
   const { values: o, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true });
   if (o.version) return console.log(VERSION);
-  const cmd = positionals.length && COMMANDS.has(positionals[0]) && !(o.file || positionals.length > 2) ? positionals[0] : null;
+  const cmd = detectCommand(positionals, o);
   const rest = cmd ? positionals.slice(1) : positionals;
   const cwd = process.cwd();
 
@@ -96,16 +97,34 @@ export async function main(argv) {
   if (cmd === "wait") return waitCmd(cwd, rest[0], o);
   if (cmd === "cancel") return cancelCmd(cwd, rest[0]);
   if (cmd === "apply") return applyCmd(cwd, rest[0], o);
-  return runTask(cwd, rest, o, argv);
+  return runTask(cwd, rest, o);
+}
+
+/**
+ * `argue apply` is a command, `argue "apply the fix in parser.ts"` is a task.
+ * A subcommand is the first word only when it is passed as its own argument and takes at most its own arguments.
+ */
+function detectCommand(positionals, o) {
+  const [first, ...more] = positionals;
+  if (!first || !COMMANDS.has(first) || o.file) return null;
+  if (first === "install" || first === "uninstall") return more.every((t) => TARGETS.includes(t)) ? first : null;
+  return more.length <= 1 && !more.some((m) => /\s/.test(m)) ? first : null;
 }
 
 // ---------------------------------------------------------------- run
 
-async function runTask(cwd, rest, o, argv) {
-  const config = loadConfig(cwd);
+async function runTask(cwd, rest, o) {
+  if (Number(process.env.ARGUE_DEPTH || 0) > 0 && !process.env.ARGUE_ALLOW_NESTED)
+    throw new Error("argue is already running this task; agents inside an argue run cannot start another one");
+  const root = await projectRoot(cwd);
+  const config = loadConfig(root);
   const drivers = registry(config);
   let task = rest.join(" ").trim();
-  if (o.file) task = (o.file === "-" ? readFileSync(0, "utf8") : readFileSync(o.file, "utf8")).trim();
+  if (o.file) {
+    if (o.file !== "-" && !existsSync(o.file)) throw new Error(`task file not found: ${o.file}`);
+    task = (o.file === "-" ? readFileSync(0, "utf8") : readFileSync(o.file, "utf8")).trim();
+    if (o["run-id"] && /[\\/]argue-task-[\w-]+\.md$/.test(o.file)) rmSync(o.file, { force: true });
+  }
   if (!task) throw new Error("empty task");
 
   const mode = o.mode ?? config.mode ?? "code";
@@ -130,18 +149,28 @@ async function runTask(cwd, rest, o, argv) {
 
   let check = o.check ?? config.check;
   if (check === "none" || check === false || check === "") check = null;
-  else if (check === "auto" || check == null) check = mode === "code" ? detectCheck(await projectRoot(cwd)) : null;
+  else if (check === "auto" || check == null) check = mode === "code" ? detectCheck(root) : null;
 
-  const rounds = num(o.rounds ?? config.rounds, "rounds", 0, 10);
-  const budget = (o.budget ?? config.budget) ? num(o.budget ?? config.budget, "budget", 0, 10000) : undefined;
+  const rounds = Math.floor(num(o.rounds ?? config.rounds, "rounds", 0, 10));
+  const budgetRaw = o.budget ?? config.budget;
+  const budget = budgetRaw == null || budgetRaw === "" ? undefined : num(budgetRaw, "budget", 0.01, 10000);
   const timeout = num(o.timeout ?? config.timeout, "timeout", 1, 600);
 
   if (o.bg) {
-    const args = argv.filter((a) => a !== "--bg" && a !== "--json");
-    const { runId, log } = startDetached({ cwd, args });
+    // Rebuild the child's arguments from resolved settings; the task goes through a file so nothing in it is parsed as flags.
+    if (o.file === "-") throw new Error("--bg cannot read the task from stdin; write it to a file and use -f <file>");
+    const taskFile = join(tmpdir(), `argue-task-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+    writeFileSync(taskFile, task);
+    const args = ["-f", taskFile, "--mode", mode, "--agents", agents.map((a) => a.name).join(","), "--judge", judge.name];
+    args.push("--check", check ?? "none", "--rounds", String(rounds), "--timeout", String(timeout));
+    if (budget) args.push("--budget", String(budget));
+    if (o.context) args.push(`--context=${o.context}`);
+    if (o.apply) args.push("--apply");
+    if (o.keep) args.push("--keep");
+    const started = startDetached({ cwd, args });
+    const { runId, log } = started;
+    const run = await waitForStart(cwd, started);
     if (o.json) {
-      const run = await waitForRun(cwd, runId);
-      if (!run) throw new Error(`run failed to start; see ${log}`);
       return console.log(
         JSON.stringify({ run_id: runId, status: "running", agents: run.meta.agents, judge: run.meta.judge, next: `argue wait ${runId}` }, null, 2),
       );
@@ -151,6 +180,8 @@ async function runTask(cwd, rest, o, argv) {
     );
     return;
   }
+
+  await reapStale(cwd);
 
   const controller = new AbortController();
   let interrupts = 0;
@@ -208,7 +239,6 @@ function num(v, name, min, max) {
 }
 
 async function projectRoot(cwd) {
-  const { run } = await import("./exec.js");
   const r = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
   return r.code === 0 ? r.stdout.trim() : cwd;
 }
@@ -216,7 +246,8 @@ async function projectRoot(cwd) {
 // ---------------------------------------------------------------- doctor / init / install
 
 async function doctor(cwd) {
-  const config = loadConfig(cwd);
+  const root = await projectRoot(cwd);
+  const config = loadConfig(root);
   const drivers = registry(config);
   const found = await detect(drivers);
   console.log(`${bold("argue")} ${VERSION} · node ${process.versions.node} · ${process.platform}`);
@@ -235,13 +266,13 @@ async function doctor(cwd) {
     if (new Set(agents.map((a) => a.kind)).size === 1)
       console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
   }
-  const check = detectCheck(await projectRoot(cwd));
+  const check = config.check && config.check !== "auto" ? config.check : detectCheck(root);
   console.log(`${bold("Check here")}      ${check ?? dim("none detected (pass --check)")}`);
   console.log(dim(`\nLogin issues? Run each CLI once on its own (e.g. "claude", "codex") to sign in.`));
 }
 
 async function init(cwd) {
-  const drivers = registry(loadConfig(cwd));
+  const drivers = registry(loadConfig(await projectRoot(cwd)));
   const installed = Object.keys(await detect(drivers));
   const path = userConfigPath();
   const current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
@@ -321,27 +352,24 @@ async function watch(cwd, id) {
 
 async function waitCmd(cwd, id, o) {
   const run = await findRun(cwd, id);
-  const seconds = o.timeout ? num(o.timeout, "timeout", 1, 3600) : 240;
+  const seconds = o.seconds ? num(o.seconds, "seconds", 1, 3600) : 240;
   console.log(JSON.stringify(summarize(await waitForFinish(cwd, run.id, seconds)), null, 2));
 }
 
 async function cancelCmd(cwd, id) {
   const run = await findRun(cwd, id);
+  if (run.status === "interrupted") {
+    await reap(run);
+    return console.log(`cleaned up interrupted run ${run.id}`);
+  }
   if (run.status !== "running") return console.log(`run ${run.id} is ${run.status}`);
   await requestCancel(run);
   console.log(`cancelled ${run.id}`);
 }
 
 async function applyCmd(cwd, id, o) {
-  const run = await findRun(cwd, id);
-  if (run.status !== "done") throw new Error(`run ${run.id} is ${run.status}`);
-  if (run.result.mode !== "code") throw new Error("ask-mode runs have no patch");
-  const file = o.agent ? join(run.path, `${o.agent.toUpperCase()}.patch`) : run.result.patch;
-  if (!existsSync(file)) throw new Error(`no patch for agent ${o.agent}`);
-  await applyPatch(run.result.project, file);
-  console.log(
-    `${green("✓ applied")} ${o.agent ? `agent ${o.agent.toUpperCase()}` : `winner ${run.result.winner.id} (${run.result.winner.agent})`} → ${run.result.files.join(", ")}`,
-  );
+  const { label, files } = await applyRun(cwd, id, o.agent);
+  console.log(`${green("✓ applied")} ${label} → ${files.join(", ")}`);
 }
 
 function trim(s = "", n) {

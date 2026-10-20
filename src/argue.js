@@ -1,10 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ask } from "./agents.js";
-import { lastJsonObject, run, shell, tail, unaborted, withSignal } from "./exec.js";
+import { lastJsonObject, run, shell, tail, unaborted, withScope } from "./exec.js";
 import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "./git.js";
 import * as P from "./prompts.js";
+import { writeJson } from "./fsx.js";
 import { renderReport } from "./report.js";
 
 export function newRunId() {
@@ -28,35 +29,34 @@ export function argue(opts) {
 }
 
 async function argueInner(opts) {
-  const {
-    task,
-    agents,
-    judge,
-    drivers,
-    installed,
-    cwd,
-    mode = "code",
-    rounds = 2,
-    budget,
-    timeout = 20,
-    apply = false,
-    keep = false,
-    ctx = "",
-    onEvent = () => {},
-    signal,
-  } = opts;
+  let { task, agents, judge, drivers, installed, cwd, mode = "code", rounds = 2, budget, timeout = 20, apply = false, keep = false, ctx = "" } = opts;
+  const { onEvent = () => {}, signal } = opts;
   const check = mode === "code" ? opts.check || null : null;
   const runId = opts.runId ?? newRunId();
+  const originalTask = opts.task;
   const timeoutMs = timeout * 60_000;
 
   // Where the user's project lives and where argue keeps things.
   const scratch = join(tmpdir(), "argue", `${basename(cwd).replace(/[^\w.-]/g, "_")}-${runId}`);
   mkdirSync(scratch, { recursive: true });
-  const ws = await openWorkspace(cwd, scratch);
+  let ws;
+  try {
+    ws = await openWorkspace(cwd, scratch);
+  } catch (err) {
+    rmQuiet(scratch);
+    throw err;
+  }
   const home = ws.home;
   const runDir = join(home, ".argue", "runs", runId);
   mkdirSync(runDir, { recursive: true });
   await ignoreArgueDir(home);
+
+  // Agents work in private copies. Briefs written by a host agent often contain the project's absolute path,
+  // which would send agents to edit the real project; point those paths at the agent's own copy instead.
+  const roots = projectPaths(home, ws.source, cwd);
+  task = localizePaths(task, roots);
+  ctx = localizePaths(ctx, roots);
+  const projectBefore = await projectFingerprint(ws);
 
   const eventsFile = join(runDir, "events.jsonl");
   const emit = (ev) => {
@@ -83,7 +83,7 @@ async function argueInner(opts) {
   const players = agents.map((a, i) => ({ ...a, id: String.fromCharCode(65 + i), alive: true, summary: "", diff: "", check: null, objections: 0 }));
   const meta = {
     runId,
-    task,
+    task: originalTask,
     mode,
     check,
     rounds,
@@ -92,8 +92,9 @@ async function argueInner(opts) {
     judge: judge.name,
     project: home,
     runDir,
+    scratch,
   };
-  writeFileSync(join(runDir, "meta.json"), JSON.stringify({ ...meta, status: "running", startedAt: new Date().toISOString(), pid: process.pid }, null, 2));
+  writeJson(join(runDir, "meta.json"), { ...meta, status: "running", startedAt: new Date().toISOString(), pid: process.pid });
   emit({ type: "start", ...meta });
 
   const makeTree = async (name) => {
@@ -123,8 +124,9 @@ async function argueInner(opts) {
     if (local.signal.aborted) throw new Error("cancelled");
     const t0 = Date.now();
     emit({ type: "call", status: "start", who, agent: agent.name, phase });
+    // Split what is left of the budget between the calls running in parallel (Claude Code enforces it per call).
     const remaining = budget > 0 ? Math.max(0.05, (budget - ledger.costUsd) / concurrent) : undefined;
-    const res = await ask(drivers, installed, agent, { prompt, cwd: dir, tag: `${who}-${phase}`, write, timeoutMs, budgetUsd: remaining });
+    const res = await ask(drivers, installed, agent, { prompt, cwd: dir, tag: `${who}-${phase}`, write, timeoutMs, budgetUsd: remaining, protect: roots });
     ledger.costUsd += res.costUsd || 0;
     ledger.tokens += res.tokens || 0;
     ledger.calls++;
@@ -162,6 +164,29 @@ async function argueInner(opts) {
     writeFileSync(join(runDir, `${p.id}.patch`), p.diff);
   };
 
+  /** After a revision: if it broke a previously passing check (or emptied the diff), roll back to the last good version. */
+  const keepBest = async (p, before) => {
+    const regressed = (before.check?.pass && p.check && !p.check.pass) || (!p.diff.trim() && before.diff.trim());
+    if (!regressed) return;
+    emit({ type: "note", text: `${p.id}'s revision ${p.diff.trim() ? "broke the check" : "removed its changes"}; keeping its previous version` });
+    await resetWorktree(ws, p.tree.path, p.tree.start);
+    if (before.diff.trim()) {
+      const f = join(runDir, `${p.id}.prev.patch`);
+      writeFileSync(f, before.diff);
+      await run("git", ["apply", "--whitespace=nowarn", f], { cwd: p.tree.path });
+      rmSync(f, { force: true });
+    }
+    Object.assign(p, {
+      diff: before.diff,
+      stats: before.stats,
+      testEdits: before.testEdits,
+      check: before.check,
+      summary: before.summary,
+      revisedAfter: false,
+    });
+    writeFileSync(join(runDir, `${p.id}.patch`), p.diff);
+  };
+
   /** Copy rival patches into a tree's .argue/<sub>/ so any agent can read them by relative path. */
   const stagePatches = (dir, sub, list) => {
     const d = join(dir, ".argue", sub);
@@ -174,7 +199,19 @@ async function argueInner(opts) {
 
   let result;
   let shared; // ask mode: one read-only tree everybody looks at
-  return withSignal(local.signal, async () => {
+  // Agents inherit ARGUE_DEPTH so an agent cannot start a nested argue run.
+  const depth = Number(process.env.ARGUE_DEPTH || 0) + 1;
+  // Record live agent pids so `argue cancel` can clean up even if this process is killed hard.
+  const pids = new Set();
+  const onSpawn = (pid, alive) => {
+    if (!pid) return;
+    if (alive) pids.add(pid);
+    else pids.delete(pid);
+    try {
+      writeFileSync(join(runDir, "pids"), [...pids].join("\n"));
+    } catch {}
+  };
+  return withScope({ signal: local.signal, env: { ARGUE_DEPTH: String(depth) }, onSpawn }, async () => {
     try {
       // ---------- setup ----------
       if (mode === "code") {
@@ -191,7 +228,7 @@ async function argueInner(opts) {
           const angle = P.ANGLES[i % P.ANGLES.length];
           const prompt = mode === "code" ? P.proposeCode({ task, check, angle, ctx }) : P.proposeAsk({ task, angle, ctx });
           const res = await call(p, p.id, "propose", prompt, p.tree.path, mode === "code", players.length);
-          p.alive = res.ok;
+          p.alive = res.ok && (mode === "code" || Boolean(res.text.trim()));
           p.summary = res.ok ? res.text : "";
         }),
       );
@@ -252,6 +289,7 @@ async function argueInner(opts) {
         );
 
         for (const p of live) {
+          p.revisedAfter = false;
           const verdicts = Object.values(reviews[p.id]).map(P.verdictOf);
           p.objections = verdicts.filter((v) => v === "issues").length;
           p.approvals = verdicts.filter((v) => v === "ok").length;
@@ -269,6 +307,9 @@ async function argueInner(opts) {
         }
 
         emit({ type: "phase", name: "revise", round });
+        const before = Object.fromEntries(
+          live.map((p) => [p.id, { diff: p.diff, stats: p.stats, testEdits: p.testEdits, check: p.check, summary: p.summary }]),
+        );
         await Promise.all(
           live.map(async (p) => {
             const feedback = Object.entries(reviews[p.id])
@@ -292,11 +333,13 @@ async function argueInner(opts) {
                 live.length,
               );
               rmSync(join(p.tree.path, ".argue", "rivals"), { recursive: true, force: true });
-              if (res.ok) p.summary = res.text;
+              if (res.ok && res.text.trim()) p.summary = res.text;
+              if (res.ok) p.revisedAfter = true;
             } else {
               if (!feedback) return;
               const res = await call(p, p.id, `revise${round}`, P.reviseAsk({ task, mine: p.summary, feedback, ctx }), shared.path, false, live.length);
-              if (res.ok) p.summary = res.text;
+              if (res.ok && res.text.trim()) p.summary = res.text;
+              if (res.ok) p.revisedAfter = true;
             }
           }),
         );
@@ -305,6 +348,7 @@ async function argueInner(opts) {
             live.map(async (p) => {
               await snapshotDiff(p);
               await runCheck(p);
+              await keepBest(p, before[p.id]);
             }),
           );
         }
@@ -328,6 +372,10 @@ async function argueInner(opts) {
           reason: finalists.length > 1 && check ? "Only solution that passes the acceptance check." : "Only remaining solution.",
           risks: pool[0].objections ? `${pool[0].objections} unresolved reviewer objection(s); see report.` : "not separately reviewed by judge",
         };
+      } else if (overBudget()) {
+        verdict = parseVerdict("", pool);
+        verdict.reason = `Budget of $${budget} reached before judging; picked by checks and reviewer objections.`;
+        if (mode === "ask") answer = players.find((p) => p.id === verdict.winner).summary;
       } else {
         emit({ type: "phase", name: "judge", round });
         const judgeTree = mode === "code" ? await scratchTree(Object.keys(pristine)[0] ?? "judge") : shared;
@@ -342,6 +390,12 @@ async function argueInner(opts) {
       if (mode === "ask" && !answer) answer = winner.summary;
 
       // ---------- outputs ----------
+      const touched = (await projectFingerprint(ws)) !== projectBefore;
+      if (touched)
+        emit({
+          type: "warning",
+          text: "your project's files changed during the run (by you, or by an agent that escaped its copy); review `git status` before applying",
+        });
       let patch = null;
       let applied = false;
       let applyError = null;
@@ -364,7 +418,7 @@ async function argueInner(opts) {
         runId,
         status: "done",
         mode,
-        task,
+        task: originalTask,
         winner: { id: winner.id, agent: winner.name },
         reason: verdict.reason,
         risks: verdict.risks,
@@ -388,27 +442,28 @@ async function argueInner(opts) {
         patch,
         applied,
         applyError,
+        projectChanged: touched,
         project: home,
         report: join(runDir, "report.md"),
         runDir,
       };
       writeFileSync(result.report, renderReport({ result, players, transcript }));
-      writeFileSync(join(runDir, "result.json"), JSON.stringify(result, null, 2));
-      writeFileSync(join(runDir, "transcript.json"), JSON.stringify(transcript, null, 2));
+      writeJson(join(runDir, "transcript.json"), transcript);
+      writeJson(join(runDir, "result.json"), result);
       emit({ type: "done", result });
       return result;
     } catch (caught) {
       const err = local.signal.aborted ? Object.assign(new Error("cancelled"), { cause: caught }) : caught;
       const failure = { runId, status: "failed", error: err.message, costUsd: round4(ledger.costUsd), tokens: ledger.tokens, runDir };
-      writeFileSync(join(runDir, "result.json"), JSON.stringify(failure, null, 2));
-      writeFileSync(join(runDir, "transcript.json"), JSON.stringify(transcript, null, 2));
+      writeJson(join(runDir, "transcript.json"), transcript);
+      writeJson(join(runDir, "result.json"), failure);
       emit({ type: "error", message: err.message });
       err.runDir = runDir;
       throw err;
     } finally {
       try {
         const m = JSON.parse(readFileSync(join(runDir, "meta.json"), "utf8"));
-        writeFileSync(join(runDir, "meta.json"), JSON.stringify({ ...m, status: result ? "done" : "failed", endedAt: new Date().toISOString() }, null, 2));
+        writeJson(join(runDir, "meta.json"), { ...m, status: result ? "done" : "failed", endedAt: new Date().toISOString() });
       } catch {}
       if (!keep) {
         await unaborted(async () => {
@@ -424,13 +479,50 @@ async function argueInner(opts) {
   });
 }
 
+/** The project's absolute path in every spelling an agent might see (symlinks like /tmp -> /private/tmp). */
+function projectPaths(...dirs) {
+  const out = new Set();
+  for (const d of dirs) {
+    if (!d) continue;
+    out.add(d);
+    try {
+      out.add(realpathSync(d));
+    } catch {}
+  }
+  return [...out].filter((d) => d.length > 1).sort((a, b) => b.length - a.length);
+}
+
+/** Replace absolute project paths with "." so agents act on their own copy. */
+export function localizePaths(text = "", roots = []) {
+  let out = String(text);
+  for (const r of roots) {
+    const esc = r.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`${esc}(?=[\\/]|\\b|$)`, "g"), ".");
+  }
+  return out;
+}
+
+/** Cheap fingerprint of the user's working tree (tracked changes + untracked files) to detect edits during a run. */
+async function projectFingerprint(ws) {
+  if (!ws.isRepo) return null;
+  const res = await run("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: ws.root });
+  const diff = await run("git", ["diff", "--no-ext-diff", "--binary", "HEAD"], { cwd: ws.root });
+  return `${res.stdout.replace(/[^\0]*\.argue\/[^\0]*\0/g, "")}::${diff.stdout.length}::${hash(diff.stdout)}`;
+}
+
+function hash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h;
+}
+
 /** Pre-existing test files a patch modifies or deletes (new test files are fine). */
 export function modifiedTests(diff = "") {
   const out = [];
   for (const block of diff.split(/^diff --git /m).slice(1)) {
     const file = block.match(/^a\/(.+?) b\//)?.[1];
     if (!file || /^new file mode/m.test(block)) continue;
-    if (/(^|[\/._-])(tests?|specs?|__tests__)([\/._-]|$)/i.test(file)) out.push(file);
+    if (/(^|[/._-])(tests?|specs?|__tests__)([/._-]|$)/i.test(file)) out.push(file);
   }
   return out;
 }

@@ -32,9 +32,24 @@ function readJson(path) {
   }
 }
 
+const KNOWN = new Set([...Object.keys(DEFAULTS), "$schema"]);
+
+/** Load settings for a project. `projectDir` should be the repo root (or the folder for non-git projects). */
 export function loadConfig(projectDir) {
-  const user = readJson(userConfigPath());
-  const project = projectDir ? readJson(join(projectDir, ".argue.json")) : {};
+  const userPath = userConfigPath();
+  const user = readJson(userPath);
+  const projectPath = projectDir ? join(projectDir, ".argue.json") : null;
+  const project = projectPath ? readJson(projectPath) : {};
+  for (const [path, cfg] of [
+    [userPath, user],
+    [projectPath, project],
+  ]) {
+    if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) throw new Error(`${path} must contain a JSON object`);
+    const unknown = Object.keys(cfg).filter((k) => !KNOWN.has(k));
+    if (unknown.length) throw new Error(`${path}: unknown setting(s) ${unknown.join(", ")} (valid: ${[...KNOWN].filter((k) => k !== "$schema").join(", ")})`);
+    for (const [name, def] of Object.entries(cfg.custom ?? {}))
+      if (!def || typeof def.command !== "string") throw new Error(`${path}: custom agent "${name}" needs a "command" string`);
+  }
   return { ...DEFAULTS, ...user, ...project, custom: { ...(user.custom ?? {}), ...(project.custom ?? {}) } };
 }
 

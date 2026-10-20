@@ -9,7 +9,7 @@ description: Run a hard coding task (or design/debugging question) through sever
 
 ## 1. Write the brief
 
-The other agents cannot see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`):
+The other agents cannot see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`). Each agent works in its own copy of the project, so refer to files by their path relative to the project root:
 - the goal, and what "done" means
 - relevant files, functions, errors, logs
 - constraints (APIs to keep, style, performance)
@@ -32,7 +32,7 @@ argue -f /tmp/argue-brief.md --bg --json            # starts the run, prints {"r
 argue wait <run_id>                                 # blocks up to 4 min; prints status JSON
 ```
 
-Repeat `argue wait <run_id>` until `status` is `done` or `failed`. Between calls, give the user a one-line update (phase and recent events from the JSON).
+Repeat `argue wait <run_id>` until `status` is `done`, `failed` or `interrupted`. Between calls, give the user a one-line update (phase and recent events from the JSON). To stop a run: `argue cancel <run_id>`.
 
 Options: `--mode ask` · `--check "<cmd>"` · `--agents claude,codex,gemini` · `--rounds 3` · `--budget 5`.
 If `argue` is not on PATH, use `npx -y argue-ai` instead.
@@ -47,4 +47,4 @@ From the final JSON, tell the user briefly:
 
 In code mode, **ask before applying**. To apply: `argue apply <run_id>` (or `argue_apply`). To apply a different agent's version: `argue apply <run_id> --agent B`.
 
-If argue says fewer than two agents are available, tell the user to run `argue doctor`.
+If argue says fewer than two agents are available, tell the user to run `argue doctor`. If the result says `projectChanged: true`, warn the user that their files changed during the run and to review `git status` before applying.
