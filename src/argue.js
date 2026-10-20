@@ -74,7 +74,9 @@ async function argueInner(opts) {
 
   // Cross-platform cancellation: `argue cancel` drops a "cancel" file into the run folder.
   const local = new AbortController();
-  if (signal) signal.addEventListener("abort", () => local.abort(), { once: true });
+  // The caller may already have cancelled while the workspace was being prepared.
+  if (signal?.aborted) local.abort();
+  else signal?.addEventListener("abort", () => local.abort(), { once: true });
   const cancelPoll = setInterval(() => {
     if (existsSync(join(runDir, "cancel"))) local.abort();
   }, 500);
@@ -98,9 +100,11 @@ async function argueInner(opts) {
   emit({ type: "start", ...meta });
 
   const makeTree = async (name) => {
+    if (local.signal.aborted) throw new Error("cancelled");
     const path = join(scratch, name);
-    const start = await addWorktree(ws, path);
+    // Track it before creating, so a worktree that is half-made when a cancel lands still gets removed.
     worktrees.push(path);
+    const start = await addWorktree(ws, path);
     return { path, start };
   };
   // Pristine scratch trees (for reviewers and the judge) are reused across rounds instead of re-created.

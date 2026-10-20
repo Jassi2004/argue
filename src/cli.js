@@ -10,49 +10,43 @@ import { killAll, run } from "./exec.js";
 import { hasGit } from "./git.js";
 import { install } from "./install.js";
 import { startMcpServer, summarize } from "./mcp.js";
+import { markSetupDone, maybeOfferSetup } from "./setup.js";
 import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "./runs.js";
 import { bold, cyan, dim, green, printResult, progressPrinter, red, yellow } from "./ui.js";
 import { VERSION } from "./version.js";
 
-const HELP = `${bold("argue")} — make AI coding agents argue over your task until the best solution wins.
+const HELP = `${bold("argue")} — several AI coding agents compete on your task; the best verified solution wins.
 
-${bold("Usage")}
-  argue "<task>" [options]         run a task (code mode: agents edit, you get the winning patch)
-  argue "<question>" --mode ask    debate an answer, no file changes
-  argue apply [run] [--agent B]    apply a run's winning patch (or another agent's)
-  argue show [run]                 print a run's report
-  argue runs                       list runs in this project
-  argue watch [run]                follow a running run's progress
-  argue wait [run] [--seconds N]   wait up to N seconds (default 240), print status JSON (for agents)
-  argue cancel [run]               stop a running run
-  argue doctor                     check which agent CLIs are installed
-  argue init                       set default agents for your machine
-  argue install [targets…]         add /argue to your agents (skill + MCP); targets:
-                                   skill claude codex cursor gemini opencode pi
-  argue uninstall [targets…]       remove those integrations
-  argue mcp                        run the MCP server (used by editors/agents)
+${bold("Start")}
+  argue "<task>"                  solve a task (your files don't change until you apply)
+  argue "<question>" --mode ask   debate an answer, no code changes
+
+${bold("After a run")}
+  argue apply [run] [--agent B]   apply the winner (or another agent's version)
+  argue show [run]                read the full report
+  argue runs                      list past runs
+  argue watch [run]               follow a run live
+  argue cancel [run]              stop a run
+
+${bold("Setup")}
+  argue doctor                    see which agents argue can use
+  argue install / uninstall       connect argue to your agents, or remove it
+  argue init                      save your default agents and budget
 
 ${bold("Options")}
-  -a, --agents <list>    competitors, e.g. "claude,codex,gemini" or "claude:opus,claude:sonnet@high"
-  -j, --judge <agent>    who picks the winner (default: an installed CLI that isn't competing)
-  -c, --check <cmd>      acceptance command run in every copy (default: auto-detect; "none" to skip)
+  -a, --agents <list>    agents to compete, e.g. claude,codex,gemini (model/effort: claude:opus@high)
+  -c, --check <cmd>      command that proves the task is done (auto-detected; "none" to skip)
+  -r, --rounds <n>       rounds of review (default 2)
+  -b, --budget <usd>     spending cap (Claude Code, OpenCode, Pi report cost)
+  -j, --judge <agent>    who picks the winner (default: automatic)
   -m, --mode <mode>      code (default) or ask
-  -r, --rounds <n>       max critique/revise rounds (default 2)
-  -b, --budget <usd>     spending cap (enforced for CLIs that report cost: Claude Code, OpenCode, Pi)
-  -t, --timeout <min>    timeout per agent call in minutes (default 20)
-  -f, --file <path>      read the task from a file ("-" = stdin)
-      --context <text>   extra context shared with every agent
-      --apply            apply the winning patch when done
-      --bg               run in the background; prints the run id (use argue watch / apply)
-      --keep             keep agent worktrees for inspection
-      --json             print the result as JSON (progress goes to stderr)
-  -v, --version · -h, --help
+  -f, --file <path>      read the task from a file
+      --apply            apply the winner automatically
+      --bg               run in the background
+      --json             machine-readable output
+  -h, --help · -v, --version
 
-${bold("Agents")}  claude · codex · gemini · cursor · opencode · pi · plus custom ones in config
-         format: agent[:model][@effort]   e.g. codex:gpt-5@high, pi:openrouter/deepseek/deepseek-r1
-
-Everything runs locally through the agent CLIs you already use and are logged in to.
-Config: ${userConfigPath()} and <project>/.argue.json`;
+More: https://github.com/Jassi2004/argue#readme`;
 
 const OPTIONS = {
   agents: { type: "string", short: "a" },
@@ -85,9 +79,11 @@ export async function main(argv) {
   const rest = cmd ? positionals.slice(1) : positionals;
   const cwd = process.cwd();
 
+  if (cmd === "mcp") return startMcpServer();
+  // First time a person uses argue at a terminal: offer to connect it to their agents (asked once).
+  if (!o.json && !o.bg && !o.quiet && !["install", "uninstall", "wait", "version"].includes(cmd)) await maybeOfferSetup();
   if (o.help || cmd === "help" || (!cmd && !rest.length && !o.file)) return console.log(HELP);
   if (cmd === "version") return console.log(VERSION);
-  if (cmd === "mcp") return startMcpServer();
   if (cmd === "doctor") return doctor(cwd);
   if (cmd === "init") return init(cwd);
   if (cmd === "install" || cmd === "uninstall") return integrations(rest, cmd === "uninstall");
@@ -106,9 +102,31 @@ export async function main(argv) {
  */
 function detectCommand(positionals, o) {
   const [first, ...more] = positionals;
-  if (!first || !COMMANDS.has(first) || o.file) return null;
+  if (!first || o.file) return null;
+  if (!COMMANDS.has(first)) {
+    // A lone word that is almost a command ("install.", "Doctor", "aply") is a typo, not a task.
+    const near = !more.length && !/\s/.test(first) && closestCommand(first);
+    if (near)
+      throw new Error(`unknown command "${first}". Did you mean "argue ${near}"?\nTo run a one-word task, add more detail, e.g. argue "${first} <what to do>"`);
+    return null;
+  }
   if (first === "install" || first === "uninstall") return more.every((t) => TARGETS.includes(t)) ? first : null;
   return more.length <= 1 && !more.some((m) => /\s/.test(m)) ? first : null;
+}
+
+function closestCommand(word) {
+  const w = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (COMMANDS.has(w)) return w;
+  for (const c of COMMANDS) if (w.length >= 3 && editDistance(w, c) <= (c.length > 5 ? 2 : 1)) return c;
+  return null;
+}
+
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
 }
 
 // ---------------------------------------------------------------- run
@@ -126,6 +144,10 @@ async function runTask(cwd, rest, o) {
     if (o["run-id"] && /[\\/]argue-task-[\w-]+\.md$/.test(o.file)) rmSync(o.file, { force: true });
   }
   if (!task) throw new Error("empty task");
+  if (!o.file && !/\s/.test(task))
+    throw new Error(
+      `"${task}" is not a command, and one word is too little to work on.\nDescribe the task, e.g. argue "fix the flaky test in auth.spec.ts". Run "argue --help" for commands.`,
+    );
 
   const mode = o.mode ?? config.mode ?? "code";
   if (!["code", "ask"].includes(mode)) throw new Error(`--mode must be "code" or "ask"`);
@@ -300,6 +322,8 @@ async function integrations(only, remove) {
   const bad = only.filter((t) => !TARGETS.includes(t));
   if (bad.length) throw new Error(`unknown target(s): ${bad.join(", ")} (choose from: ${TARGETS.join(" ")})`);
   const results = await install({ only: only.length ? only : undefined, uninstall: remove });
+  // Either way the user has made a choice, so the first-run prompt should not appear again.
+  if (!only.length) markSetupDone();
   for (const r of results) {
     const mark = r.status === "error" ? red("✗") : r.status === "skipped" ? dim("·") : green("✓");
     console.log(`  ${mark} ${r.title.padEnd(60)} ${r.status === "skipped" ? dim(r.detail) : r.status === "error" ? red(r.detail) : dim(r.detail)}`);

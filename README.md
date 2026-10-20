@@ -1,140 +1,96 @@
 # argue
 
-**Make AI coding agents argue over your task until the best solution wins.**
-
-```bash
-argue "fix the race condition in ws/reconnect.ts"
-```
-
-`argue` takes the coding agents you already have (Claude Code, Codex, Gemini CLI, Cursor, OpenCode, Pi) and has them compete on the same task:
-
-1. **Solve:** each agent solves the task on its own, in a private copy of your repo.
-2. **Check:** your tests run in every copy.
-3. **Attack:** agents review each other's work. They can apply rival patches and run tests to prove bugs.
-4. **Fix:** each agent fixes the problems that hold up, and can borrow better ideas from the others.
-5. **Judge:** a neutral agent picks the winner. Passing tests count most.
-
-You get the winning patch, the reasons it won, the remaining risks and the full debate. **Your files are not touched** until you run `argue apply`.
-
-Everything runs locally through the CLIs you're already logged in to. There's no account, no server, and no new API keys.
-
-## Install
+**Several AI coding agents compete on your task. The best verified solution wins.**
 
 ```bash
 npm i -g argue-ai
-argue doctor        # shows which agents it found
-argue install       # adds /argue to all your coding agents
+argue "fix the race condition in ws/reconnect.ts"
 ```
 
-Requires Node 20+, git, and at least one agent CLI:
+The first time you run argue, it offers to connect itself to your coding agents. After that, you can also just ask your agent to *"argue this"*.
+
+## How it works
+
+1. Each agent (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) solves the task in its own private copy of your project.
+2. Your tests run in every copy.
+3. The agents review each other's work and try to prove bugs.
+4. Each agent fixes the problems that hold up.
+5. A judge picks the winner.
+
+You get the winning change and a report of the debate. **Your files don't change** until you run `argue apply`.
+
+Everything runs on your machine through the agent CLIs you already use. There's no account and no server.
+
+## Requirements
+
+Node 20+, git, and at least one of these agent CLIs, logged in:
 
 | Agent | Install |
 |---|---|
 | Claude Code | `npm i -g @anthropic-ai/claude-code` |
-| Codex CLI | `npm i -g @openai/codex` |
+| Codex | `npm i -g @openai/codex` |
 | Gemini CLI | `npm i -g @google/gemini-cli` |
 | Cursor CLI | `curl https://cursor.com/install -fsS \| bash` |
 | OpenCode | `npm i -g opencode-ai` |
 | Pi | `npm i -g @earendil-works/pi-coding-agent` |
 
-**If you have only one agent,** argue runs several copies of it, each nudged toward a different approach (e.g. `claude:opus` vs. `claude:sonnet`). Mixing vendors works best, because different models catch different mistakes.
+With only one CLI, argue runs two copies of it. Mixing vendors works better.
 
-## Use it from your editor or agent
-
-After `argue install`, ask your agent as usual:
-
-> argue this: the checkout total is wrong when a coupon and a gift card are combined
-
-| Where you work | How it connects |
-|---|---|
-| Claude Code | skill + MCP server |
-| Codex | skill + MCP server |
-| Cursor | skill + MCP server |
-| Gemini CLI | skill + MCP server + `/argue` command |
-| OpenCode | skill + MCP server + `/argue` command |
-| Pi | skill + `/argue` prompt |
-| Anything else | any agent that can run shell commands can use `argue … --json` |
-
-Your agent writes the brief, starts the run, reports progress, and asks you before applying the result.
-
-## Usage
+## Commands
 
 ```bash
-argue "<task>"                                   # auto: installed agents + detected test command
-argue "<task>" -a claude,codex,gemini            # choose competitors
-argue "<task>" -a claude:opus@high,codex:gpt-5   # models and reasoning effort
-argue "<task>" -c "pytest -q tests/test_auth.py" # acceptance check
-argue "<question>" --mode ask                    # debate an answer; no code changes
-argue -f brief.md --rounds 3 --budget 5          # long brief, more rounds, $5 cap
-argue "<task>" --bg                              # run in the background
-argue "<task>" --apply                           # apply the winner automatically
-
-argue watch                   # follow the latest run
-argue apply [run]             # apply the winner
-argue apply [run] --agent B   # …or another agent's version
-argue show [run]              # full report: scoreboard, debate, patch
-argue runs                    # history
-argue cancel [run]            # stop a run (also cleans up a run that was killed)
+argue "<task>"                  # solve a task
+argue "<question>" --mode ask   # debate an answer, no code changes
+argue apply                     # apply the latest winner
+argue show                      # read the full report
+argue doctor                    # see what argue found on your machine
+argue install / uninstall       # connect argue to your agents, or remove it
 ```
 
-Agent format: `agent[:model][@effort]`, e.g. `codex:gpt-5@high`, `pi:openrouter/deepseek/deepseek-r1`, `opencode:anthropic/claude-sonnet-4`.
+Useful options:
 
-### Modes
+```bash
+-a claude,codex,gemini   # choose the agents (model and effort: claude:opus@high)
+-c "npm test"            # the command that proves the task is done (auto-detected)
+-r 2                     # rounds of review (default 2)
+-b 5                     # budget in USD (for CLIs that report cost)
+--bg                     # run in the background; check later with: argue watch
+```
 
-- **code** (default): agents edit code, and you get a winning patch.
-- **ask**: agents investigate read-only and debate. The judge writes one final answer plus a "where they disagreed" section. Use it for architecture, root-cause analysis, reviews and plans.
+`argue --help` lists everything.
 
-## Configuration
+## Safe by default
 
-`argue init` saves your defaults. They're stored in `~/.config/argue/config.json`, and can be overridden per project with `.argue.json`:
+- Agents only work in private copies, never in your project.
+- Nothing is applied until you say so.
+- If a fix breaks something that used to work, argue keeps the earlier version.
+- Ctrl-C stops all agents and cleans up.
+- `argue uninstall` removes everything argue added.
+
+## Settings (optional)
+
+`argue init` saves your defaults, or you can create `.argue.json` in a project:
 
 ```json
-{
-  "agents": "claude:opus,codex,gemini",
-  "judge": "claude:opus",
-  "check": "npm test",
-  "rounds": 2,
-  "budget": 10,
-  "timeout": 20
-}
+{ "agents": "claude:opus,codex", "check": "npm test", "rounds": 2, "budget": 10 }
 ```
 
-### Custom agents
+<details>
+<summary>Advanced</summary>
 
-Any CLI that can take a prompt can compete:
+**Custom agents.** Any CLI can compete:
 
 ```json
-{
-  "custom": {
-    "aider": {
-      "command": "aider --yes-always --no-auto-commits --message-file {prompt_file}",
-      "readCommand": "aider --yes-always --dry-run --message-file {prompt_file}"
-    }
-  }
-}
+{ "custom": { "aider": { "command": "aider --yes-always --message-file {prompt_file}" } } }
 ```
 
-Placeholders: `{prompt_file}`, `{cwd}`, `{model}`. The command's stdout is the agent's reply. `ARGUE_WRITE=1` is set when the agent is allowed to edit.
+**More options.** `--context "<text>"` shares extra context with every agent, `-t <min>` sets the time limit per agent call (default 20), `--keep` keeps the agents' copies for inspection, and `argue wait <run>` waits for a background run and prints its status as JSON.
 
-## How it stays safe
+**MCP server.** `argue mcp` provides the tools `argue_start`, `argue_wait`, `argue_apply`, `argue_cancel`, `argue_runs` and `argue_agents`. `argue install` registers it automatically.
 
-- Each agent works in a separate git worktree outside your project. Uncommitted and untracked files are included, so agents see what you see. Absolute paths to your project in the task are pointed at each agent's own copy, and argue warns you if your project's files change during a run.
-- If an agent's revision breaks a solution that used to pass the check, argue keeps the earlier version.
-- Agents can't start nested argue runs.
-- Your repo's history is never touched, and nothing is committed to it. Run data lives in `.argue/`, which is git-ignored automatically.
-- Plain folders that aren't git repos are fine too; argue makes a private snapshot.
-- `node_modules` and virtualenvs are shared into each copy without being included in patches.
-- If an agent changes or deletes existing tests, it's flagged to the judge.
-- Ctrl-C stops every agent and cleans up. If the argue process itself is killed, the next run (or `argue cancel`) stops leftover agents and removes their copies.
-- Cost: Claude Code, OpenCode and Pi report spend, and `--budget` is enforced on them. Codex, Gemini and Cursor bill your existing plans and only report tokens.
+**Where things go.** Run reports go in `<project>/.argue/` (git-ignored automatically). Connections are a skill plus an MCP entry in each agent's config. Settings live in `~/.config/argue/`.
 
-## MCP server
-
-`argue mcp` is a stdio MCP server with these tools: `argue_start`, `argue_wait`, `argue_apply`, `argue_cancel`, `argue_runs` and `argue_agents`. Runs continue in the background, so host tool timeouts don't matter. `argue install` registers it for you, or add it by hand:
-
-```json
-{ "mcpServers": { "argue": { "command": "argue", "args": ["mcp"] } } }
-```
+</details>
 
 ## License
 

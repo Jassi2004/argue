@@ -1,6 +1,6 @@
 {
   "name": "argue-ai",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Make AI coding agents (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi) argue over your task until the best solution wins.",
   "type": "module",
   "bin": {
@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "test": "node --test test/unit.test.js test/integration.test.js",
-    "lint": "npx -y -p eslint@9 -p @eslint/js@9 -p globals@16 eslint src bin test && npx -y prettier@3 --check src bin test",
+    "lint": "npm i --no-save eslint@9 @eslint/js@9 globals@16 prettier@3 && eslint src bin test && prettier --check src bin test",
     "format": "npx -y prettier@3 --write src bin test"
   },
   "engines": {
