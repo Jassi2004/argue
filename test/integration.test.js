@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -300,7 +300,7 @@ test("CLI: --bg --json, wait, show, runs, cancel", async () => {
   assert.match(cli("show", started.run_id), /Winner: B \(good\)/);
   assert.match(cli("runs"), new RegExp(started.run_id));
 
-  const slow = JSON.parse(cli("x", "-a", "slow,slow", "-j", "slow", "-c", "none", "--bg", "--json"));
+  const slow = JSON.parse(cli("slow task here", "-a", "slow,slow", "-j", "slow", "-c", "none", "--bg", "--json"));
   assert.match(cli("cancel", slow.run_id), /cancelled/);
   s = JSON.parse(cli("wait", slow.run_id, "-t", "15"));
   assert.equal(s.status, "failed");
@@ -433,15 +433,15 @@ test("invalid config and bad flags give clear errors", async () => {
   const { spawnSync } = await import("node:child_process");
   const cli = (...a) => spawnSync(process.execPath, [BIN, ...a], { cwd: dir, encoding: "utf8" });
   writeFileSync(join(dir, ".argue.json"), '{"agentz":"claude"}');
-  assert.match(cli("x").stderr, /unknown setting\(s\) agentz/);
+  assert.match(cli("fix the add function").stderr, /unknown setting\(s\) agentz/);
   writeFileSync(join(dir, ".argue.json"), "{not json");
-  assert.match(cli("x").stderr, /invalid JSON/);
+  assert.match(cli("fix the add function").stderr, /invalid JSON/);
   writeFileSync(join(dir, ".argue.json"), JSON.stringify(config));
-  assert.match(cli("x", "-a", "good,bad", "-r", "nope").stderr, /--rounds must be a number/);
-  assert.match(cli("x", "-a", "good").stderr, /at least two/);
-  assert.match(cli("x", "-a", "good,nope").stderr, /unknown agent "nope"/);
-  assert.match(cli("x", "--mode", "chat", "-a", "good,bad").stderr, /--mode must be/);
-  assert.match(cli("x", "--frobnicate").stderr, /Unknown option/);
+  assert.match(cli("fix the add function", "-a", "good,bad", "-r", "nope").stderr, /--rounds must be a number/);
+  assert.match(cli("fix the add function", "-a", "good").stderr, /at least two/);
+  assert.match(cli("fix the add function", "-a", "good,nope").stderr, /unknown agent "nope"/);
+  assert.match(cli("fix the add function", "--mode", "chat", "-a", "good,bad").stderr, /--mode must be/);
+  assert.match(cli("fix the add function", "--frobnicate").stderr, /Unknown option/);
   assert.match(cli("apply").stderr, /no argue runs/);
 });
 
@@ -465,7 +465,7 @@ test("--bg reports an immediate failure instead of hanging", async () => {
   const { spawnSync } = await import("node:child_process");
   const t0 = Date.now();
   // Settings are validated before the background process starts…
-  const res = spawnSync(process.execPath, [BIN, "x", "-a", "good,bad", "--budget=-5", "--bg"], { cwd: dir, encoding: "utf8" });
+  const res = spawnSync(process.execPath, [BIN, "fix the add function", "-a", "good,bad", "--budget=-5", "--bg"], { cwd: dir, encoding: "utf8" });
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /--budget must be/);
   // …and a background process that dies during setup is reported right away.
@@ -490,7 +490,7 @@ test("a run killed with SIGKILL is cleaned up by cancel and by the next run", { 
   writeFileSync(join(dir, ".argue.json"), JSON.stringify(config));
   const { spawnSync } = await import("node:child_process");
   const cli = (...a) => spawnSync(process.execPath, [BIN, ...a], { cwd: dir, encoding: "utf8" });
-  const started = JSON.parse(cli("x", "-a", "slow,slow", "-j", "good", "-c", "none", "--bg", "--json").stdout);
+  const started = JSON.parse(cli("fix the add function", "-a", "slow,slow", "-j", "good", "-c", "none", "--bg", "--json").stdout);
   const runDir = join(dir, ".argue", "runs", started.run_id);
   for (let i = 0; i < 50 && !(existsSync(join(runDir, "pids")) && readFileSync(join(runDir, "pids"), "utf8").trim().split("\n").length >= 2); i++)
     await new Promise((r) => setTimeout(r, 100));
@@ -499,7 +499,7 @@ test("a run killed with SIGKILL is cleaned up by cancel and by the next run", { 
   await new Promise((r) => setTimeout(r, 300));
   assert.match(cli("runs").stdout, /interrupted/);
   // The next run reaps the dead one: its agents are killed and its worktrees removed.
-  const next = cli("fix", "-a", "good,bad", "-j", "good", "-c", "node test.mjs", "-r", "0", "--json");
+  const next = cli("fix the add function", "-a", "good,bad", "-j", "good", "-c", "node test.mjs", "-r", "0", "--json");
   assert.equal(next.status, 0, next.stderr);
   await new Promise((r) => setTimeout(r, 300));
   const alive = agentPids.filter((pid) => {
@@ -574,4 +574,83 @@ test("install skips CLIs that are not installed and uninstall leaves no empty fi
     if (prev.XDG === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = prev.XDG;
   }
+});
+
+test("typos of commands and one-word tasks never start a run", async () => {
+  const dir = makeRepo();
+  writeFileSync(join(dir, ".argue.json"), JSON.stringify(config));
+  const { spawnSync } = await import("node:child_process");
+  for (const [arg, msg] of [
+    ["install.", /Did you mean "argue install"/],
+    ["Doctor", /Did you mean "argue doctor"/],
+    ["aply", /Did you mean "argue apply"/],
+    ["fixit", /one word is too little/],
+  ]) {
+    const res = spawnSync(process.execPath, [BIN, arg, "-a", "good,bad"], { cwd: dir, encoding: "utf8" });
+    assert.notEqual(res.status, 0, arg);
+    assert.match(res.stderr, msg, arg);
+  }
+  assert.ok(!existsSync(join(dir, ".argue", "runs")), "no run was started");
+});
+
+test("first-run setup: asks once, connects on yes, remembers no, never asks in automation", async () => {
+  const { mkdirSync } = await import("node:fs");
+  const { maybeOfferSetup, interactive, readState, statePath } = await import("../src/setup.js");
+  const home = mkdtempSync(join(tmpdir(), "argue-home-"));
+  mkdirSync(join(home, ".cursor"));
+  const prev = { XDG: process.env.XDG_CONFIG_HOME, PATH: process.env.PATH };
+  process.env.XDG_CONFIG_HOME = join(home, ".config");
+  process.env.PATH = dirname(process.execPath);
+  const lines = [];
+  const write = (s) => lines.push(s);
+  try {
+    // Automation and agents are never asked.
+    assert.equal(interactive({}, false), false, "no TTY");
+    assert.equal(interactive({ CI: "1" }, true), false);
+    assert.equal(interactive({ CLAUDECODE: "1" }, true), false);
+    assert.equal(interactive({ PI_CODING_AGENT: "true" }, true), false);
+    assert.equal(interactive({ CODEX_SANDBOX: "seatbelt" }, true), false);
+    assert.equal(interactive({ ARGUE_DEPTH: "1" }, true), false);
+    assert.equal(interactive({}, true), true);
+
+    // "n" is remembered and never asked again.
+    let asked = 0;
+    assert.equal(await maybeOfferSetup({ home, write, force: true, ask: async () => (asked++, "n") }), false);
+    assert.equal(readState().setup, "declined");
+    assert.equal(await maybeOfferSetup({ home, write, ask: async () => (asked++, "y") }), false);
+    assert.equal(asked, 1, "not asked a second time");
+
+    // Enter (default yes) connects everything that is installed.
+    rmSync(statePath());
+    assert.equal(await maybeOfferSetup({ home, write, force: true, ask: async () => "" }), true);
+    assert.ok(existsSync(join(home, ".agents", "skills", "argue", "SKILL.md")));
+    assert.ok(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.argue);
+    assert.equal(readState().setup, "done");
+    assert.ok(
+      lines.some((l) => /Cursor/.test(l)),
+      "names the agents it found",
+    );
+
+    // An existing install (e.g. from an older argue) counts as done, without asking.
+    rmSync(statePath());
+    assert.equal(await maybeOfferSetup({ home, write, ask: async () => assert.fail("should not ask") }), false);
+    assert.equal(readState().setup, "done");
+  } finally {
+    process.env.PATH = prev.PATH;
+    if (prev.XDG === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prev.XDG;
+  }
+});
+
+test("first-run prompt never appears for piped/non-TTY CLI use", async () => {
+  const home = mkdtempSync(join(tmpdir(), "argue-home-"));
+  const { spawnSync } = await import("node:child_process");
+  const res = spawnSync(process.execPath, [BIN, "doctor"], {
+    cwd: home,
+    encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.doesNotMatch(res.stdout, /Welcome to argue/);
+  assert.ok(!existsSync(join(home, ".agents")), "nothing installed without asking");
 });
