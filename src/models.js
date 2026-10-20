@@ -160,6 +160,25 @@ export function lineupNote(descs) {
   return `argue mode will argue between ${list}. To add another harness, change a model, or raise or lower effort, just say so.`;
 }
 
+/**
+ * The lineup as a markdown card for host agents to show at the very start of an argue session.
+ * Rendered by Claude Code, Codex, Pi, OpenCode, Cursor and Gemini as a small table.
+ */
+export function lineupCard(descs) {
+  const rows = descs.map(
+    (d, i) => `| ${String.fromCharCode(65 + i)} | ${d.harness} | ${d.model ?? "default model"} | ${d.effortSupported ? (d.effort ?? "default") : "n/a"} |`,
+  );
+  return [
+    "**⚔️ argue lineup**",
+    "",
+    "| | Harness | Model | Effort |",
+    "|---|---|---|---|",
+    ...rows,
+    "",
+    "_Want another harness, a different model, or more or less effort? Just say so._",
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------- validation
 
 /** Models a harness can list without spending anything, or null if it has no list command. */
@@ -260,7 +279,7 @@ export async function manageLineup(root, { agents: spec, reset } = {}) {
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
   const view = (agents, source, extra = {}) => {
     const lineup = agents.map((a) => describe(a, { drivers, cwd: root }));
-    return { ...extra, lineup, source, note: lineup.length ? lineupNote(lineup) : null };
+    return { ...extra, lineup, source, note: lineup.length ? lineupNote(lineup) : null, display: lineup.length ? lineupCard(lineup) : null };
   };
   const automatic = () => parseAgents(defaultLineup(Object.keys(installed)) || [], drivers);
 

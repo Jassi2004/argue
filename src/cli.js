@@ -10,10 +10,10 @@ import { killAll, run } from "./exec.js";
 import { hasGit } from "./git.js";
 import { install } from "./install.js";
 import { startMcpServer, summarize } from "./mcp.js";
-import { describe, harnessDefaults, label, lineupNote, manageLineup } from "./models.js";
+import { describe, harnessDefaults, lineupNote, manageLineup } from "./models.js";
 import { markSetupDone, maybeOfferSetup } from "./setup.js";
 import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "./runs.js";
-import { bold, cyan, dim, green, printResult, progressPrinter, red, yellow } from "./ui.js";
+import { bold, cyan, dim, green, lineupBox, printResult, progressPrinter, red, yellow } from "./ui.js";
 import { VERSION } from "./version.js";
 
 const HELP = `${bold("argue")} — several AI coding agents compete on your task; the best verified solution wins.
@@ -199,7 +199,11 @@ async function runTask(cwd, rest, o) {
     const run = await waitForStart(cwd, started);
     if (o.json) {
       return console.log(
-        JSON.stringify({ run_id: runId, status: "running", lineup: run.meta.agents, note: run.meta.note, next: `argue wait ${runId}` }, null, 2),
+        JSON.stringify(
+          { run_id: runId, status: "running", lineup: run.meta.agents, display: run.meta.display, note: run.meta.note, next: `argue wait ${runId}` },
+          null,
+          2,
+        ),
       );
     }
     console.log(
@@ -321,9 +325,12 @@ async function doctor(cwd, o = {}) {
     );
   }
 
-  console.log(`\n${bold("Lineup")} ${dim(config.agents ? "(saved)" : "(automatic: change it with argue lineup)")}`);
-  if (!descs.length) console.log(`  ${red("none — install at least one agent CLI")}`);
-  descs.forEach((dsc, i) => console.log(`  ${cyan(String.fromCharCode(65 + i))}  ${label(dsc)}`));
+  console.log("");
+  if (!descs.length) console.log(`${bold("Lineup")}  ${red("none — install at least one agent CLI")}`);
+  else {
+    for (const line of lineupBox(descs)) console.log(line);
+    console.log(dim(`  ${config.agents ? "your saved default" : "automatic (from installed CLIs)"} · change: argue lineup <a,b,…>`));
+  }
   if (agents.length && new Set(agents.map((a) => a.kind)).size === 1)
     console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
   console.log(`\n${bold("Check here")}  ${check ?? dim("none detected (pass --check)")}`);
@@ -343,8 +350,10 @@ async function lineupCmd(cwd, rest, o) {
   if (res.reset) console.log(`${green("✓")} back to the automatic lineup`);
   if (res.saved) console.log(`${green("✓")} saved as your default lineup`);
   if (res.overriddenByProject) console.log(yellow("note: this project's .argue.json sets its own agents, which override your default here"));
-  console.log(`${bold("Lineup")} ${dim(`(${res.source})`)}`);
-  res.lineup.forEach((d, i) => console.log(`  ${cyan(String.fromCharCode(65 + i))}  ${label(d)}`));
+  for (const line of lineupBox(res.lineup)) console.log(line);
+  console.log(
+    dim(`  ${res.source === "saved" ? "your saved default" : "automatic (from installed CLIs)"} · change: argue lineup <a,b,…> · reset: argue lineup --reset`),
+  );
 }
 
 async function init(cwd) {

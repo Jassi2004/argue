@@ -89,7 +89,7 @@ const TOOLS = [
     name: "argue_lineup",
     annotations: { title: "Show or set argue lineup", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      'Show the default lineup (harness, model, effort for each competing agent), or set a new one. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
+      'Call this FIRST in every argue session, before writing the brief, and show the user the returned `display` as-is. Shows the default lineup (harness, model, effort for each competing agent), or sets a new one. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
     inputSchema: {
       type: "object",
       properties: {
@@ -211,8 +211,9 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
         run_id: started.runId,
         status: "running",
         lineup: run.meta.agents,
+        display: run.meta.display,
         note: run.meta.note,
-        next: "Tell the user the note (one line, as-is), then call argue_wait with this run_id until status is done. If the user asks to add a harness or change a model or effort, call argue_cancel, then argue_lineup with the new lineup (it checks and saves it), then argue_start again with the same task.",
+        next: "If you have not shown the user this lineup yet in this session (or it changed), show `display` exactly as-is. Then call argue_wait with this run_id until status is done. If the user asks to add a harness or change a model or effort, call argue_cancel, then argue_lineup with the new lineup (it checks and saves it), then argue_start again with the same task.",
       };
     }
     case "argue_wait": {

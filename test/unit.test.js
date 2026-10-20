@@ -186,3 +186,23 @@ test("checkAgent validates effort without any CLI call", async () => {
   assert.match((await checkAgent(parseAgents("codex:x")[0], { installed })).error, /not installed/);
   assert.equal((await checkAgent(parseAgents("claude")[0], { installed })).ok, true, "a bare harness needs no check");
 });
+
+test("lineup card (for agents) and box (for the terminal) show harness, model and effort", async () => {
+  const { lineupCard } = await import("../src/models.js");
+  const { lineupBox } = await import("../src/ui.js");
+  const descs = [
+    { harness: "Claude Code", model: "sonnet", effort: null, effortSupported: true },
+    { harness: "Gemini CLI", model: null, effortSupported: false },
+  ];
+  const card = lineupCard(descs);
+  assert.match(card, /\| A \| Claude Code \| sonnet \| default \|/);
+  assert.match(card, /\| B \| Gemini CLI \| default model \| n\/a \|/);
+  assert.doesNotMatch(card, /judge/i);
+  const box = lineupBox(descs)
+    .join("\n")
+    .replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(box, /argue lineup/);
+  assert.match(box, /A {3}Claude Code {3}sonnet/);
+  const widths = new Set(lineupBox(descs).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").length));
+  assert.equal(widths.size, 1, "box lines line up");
+});
