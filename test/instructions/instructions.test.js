@@ -46,7 +46,7 @@ for (const [name, build] of Object.entries(cases)) {
     assert.doesNotMatch(text, /\{\w+\}/, "every blank is filled");
     const file = join(SNAP, `${name}.txt`);
     if (process.env.UPDATE_SNAPSHOTS || !existsSync(file)) writeFileSync(file, `${text}\n`);
-    assert.equal(text, readFileSync(file, "utf8").trimEnd(), `instruction changed; if intended, run UPDATE_SNAPSHOTS=1 npm test`);
+    assert.equal(text, readFileSync(file, "utf8").replace(/\r\n/g, "\n").trimEnd(), `instruction changed; if intended, run UPDATE_SNAPSHOTS=1 npm test`);
   });
 }
 
