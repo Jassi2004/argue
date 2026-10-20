@@ -7,7 +7,27 @@ description: Run a hard coding task (or design/debugging question) through sever
 
 `argue` makes several AI coding agents compete on one task in isolated copies of the repo and returns the winning, verified result. It never changes the user's files unless asked to apply.
 
-## 1. Write the brief
+## 1. Show the lineup first
+
+Before anything else (before writing the brief), get the lineup and show it to the user:
+
+- **MCP:** call `argue_lineup` with `cwd` (absolute project path).
+- **Shell:** `argue lineup --json` (if `argue` is not on PATH, use `npx -y argue-ai`).
+
+The result has a `display` field, a small markdown table like:
+
+**⚔️ argue lineup**
+
+| | Harness | Model | Effort |
+|---|---|---|---|
+| A | Claude Code | sonnet | default |
+| B | Codex | gpt-6.1-sol | high |
+
+_Want another harness, a different model, or more or less effort? Just say so._
+
+**Make it your very first message, exactly as-is.** Then carry on straight away: don't ask a question or wait for an answer.
+
+## 2. Write the brief
 
 The other agents cannot see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`). Each agent works in its own copy of the project, so refer to files by their path relative to the project root:
 - the goal, and what "done" means
@@ -21,16 +41,11 @@ Pick a mode:
 
 If a command proves the task is done (tests, a repro script), pass it with `--check`. Otherwise argue auto-detects the project's test command.
 
-## 2. Start it and show the lineup
+Then start the run:
+- **MCP:** `argue_start` with `task` (the brief) and `cwd`, plus `mode` / `check` if needed.
+- **Shell** (from the project directory): `argue -f /tmp/argue-brief.md --bg --json`.
 
-**With the MCP tools:** call `argue_start` with `task` (the brief) and `cwd` (absolute project path), plus `mode` / `check` if needed.
-**With the shell** (from the project directory): `argue -f /tmp/argue-brief.md --bg --json`. If `argue` is not on PATH, use `npx -y argue-ai`.
-
-The result contains a `note`, for example:
-
-> argue mode will argue between Claude Code (sonnet, effort default) and Codex (gpt-6.1-sol, effort high). To add another harness, change a model, or raise or lower effort, just say so.
-
-**Show the user this note as-is, as a short note, then carry on.** Do not ask a question or wait for an answer.
+You've already shown the lineup, so don't repeat it, unless it has changed since (then show the new `display`).
 
 ## 3. Wait
 
@@ -46,7 +61,7 @@ When the user asks to add or drop a harness, change a model, or raise or lower e
    - Effort exists only for `claude` (low…max), `codex` (minimal…ultra) and `pi` (off…max). For the others, tell the user it isn't supported.
 3. Check and save it: `argue_lineup` with `agents` (shell: `argue lineup <lineup>`). This verifies each model and effort is available, then saves it as the user's default.
    - If it reports errors, tell the user which model or effort isn't available (include the suggestions it gives) and ask what to use instead. Don't restart.
-4. Start again with the same brief (step 2), and show the new note.
+4. Show the new lineup (`display` from `argue_lineup`), then start again with the same brief.
 
 To see the lineup without running: `argue_lineup` with no `agents` (shell: `argue lineup`). To go back to the automatic lineup: `reset: true` (shell: `argue lineup --reset`).
 

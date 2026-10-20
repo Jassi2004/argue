@@ -20,19 +20,17 @@ const PHASE = {
 export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`)) {
   return (e) => {
     switch (e.type) {
-      case "start":
+      case "start": {
+        write("");
+        for (const line of lineupBox(e.agents)) write(line);
+        write(dim("  change it: argue lineup claude:opus,codex@high (checks the models, saves as default)"));
+        write("");
         write(`${bold("argue")} ${dim(e.runId)}`);
         write(`  ${dim("task")}    ${trim(e.task)}`);
-        for (const a of e.agents) {
-          const effort = a.effortSupported ? `effort ${a.effort ?? "default"}` : "";
-          write(
-            `  ${a === e.agents[0] ? dim("agents") : "      "}  ${cyan(a.id)} ${a.harness ?? a.agent} ${dim("·")} ${a.model ?? "default model"}${effort ? ` ${dim("·")} ${effort}` : ""}`,
-          );
-        }
         if (e.check) write(`  ${dim("check")}   ${e.check}`);
         if (e.mode === "ask") write(`  ${dim("mode")}    ask (no file changes)`);
-        write(dim(`  change agents, models or effort: argue lineup <a,b,…>  (e.g. claude:opus,codex@high)`));
         break;
+      }
       case "phase":
         write(`\n${bold(PHASE[e.name] ?? e.name)}${e.round ? dim(` (round ${e.round})`) : ""}`);
         break;
@@ -89,6 +87,27 @@ export function printResult(r, write = (s) => process.stdout.write(`${s}\n`)) {
     write("");
   }
   write(`${dim("   report")}  ${r.report}`);
+}
+
+/** A boxed table of who is competing (harness · model · effort), shown first on every run. */
+export function lineupBox(agents) {
+  const rows = agents.map((a, i) => [
+    String.fromCharCode(65 + i),
+    a.harness ?? a.agent,
+    a.model ?? "default model",
+    a.effortSupported ? (a.effort ?? "default") : "n/a",
+  ]);
+  const head = ["", "Harness", "Model", "Effort"];
+  const w = head.map((h, c) => Math.max(h.length, ...rows.map((r) => r[c].length)));
+  const line = (cells, fmt = (x) => x) => `│ ${cells.map((x, c) => fmt(x.padEnd(w[c]), c)).join("   ")} │`;
+  const width = w.reduce((a, b) => a + b, 0) + 3 * (w.length - 1);
+  const title = " ⚔  argue lineup ";
+  return [
+    `╭─${bold(title)}${"─".repeat(Math.max(0, width - title.length + 1))}╮`,
+    line(head, (x) => dim(x)),
+    ...rows.map((r) => line(r, (x, c) => (c === 0 ? cyan(x) : c === 2 ? bold(x) : x))),
+    `╰${"─".repeat(width + 2)}╯`,
+  ];
 }
 
 /** Dollar amount as reported by CLIs that report cost (others bill your plan and only report tokens). */

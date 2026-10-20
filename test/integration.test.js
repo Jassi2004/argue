@@ -712,12 +712,13 @@ process.exit(1);
     ],
   );
   assert.match(res.note, /Codex \(gpt-a, effort high\) and Codex \(gpt-b, effort low\)/);
+  assert.match(res.display, /\| B \| Codex \| gpt-b \| low \|/);
   assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, "codex,codex:gpt-b@low");
 
   const doc = JSON.parse(cli("doctor", "--json").stdout);
   assert.equal(doc.lineupSource, "saved");
   assert.equal(doc.harnesses.find((h) => h.agent === "codex").model, "gpt-a");
-  assert.match(cli("doctor").stdout, /Codex · gpt-b · effort low/);
+  assert.match(cli("doctor").stdout, /B +Codex +gpt-b +low/);
 
   assert.equal(cli("lineup", "--reset").status, 0);
   assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, undefined);
@@ -730,4 +731,5 @@ test("every run records harness, model and effort, and the start note has no jud
   assert.match(meta.note, /^argue mode will argue between good \(default model\) and bad \(default model\)\./);
   assert.doesNotMatch(meta.note, /judge/i);
   assert.equal(meta.agents[0].harness, "good");
+  assert.match(meta.display, /argue lineup/);
 });

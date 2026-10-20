@@ -88,7 +88,7 @@ export function targets(home = homedir()) {
         const { command, args, env } = await mcpCommand();
         const file = join(home, ".codex", "config.toml");
         const toml = existsSync(file) ? readFileSync(file, "utf8") : "";
-        const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\ndefault_tools_approval_mode = "writes"\n\n[mcp_servers.argue.tools.argue_start]\napproval_mode = "approve"\n\n[mcp_servers.argue.tools.argue_cancel]\napproval_mode = "approve"\n\n[mcp_servers.argue.env]\nPATH = ${JSON.stringify(env.PATH)}\n`;
+        const block = `[mcp_servers.argue]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\ntool_timeout_sec = 120\ndefault_tools_approval_mode = "writes"\n\n[mcp_servers.argue.tools.argue_start]\napproval_mode = "approve"\n\n[mcp_servers.argue.tools.argue_cancel]\napproval_mode = "approve"\n\n[mcp_servers.argue.tools.argue_lineup]\napproval_mode = "approve"\n\n[mcp_servers.argue.env]\nPATH = ${JSON.stringify(env.PATH)}\n`;
         writeAtomic(file, `${stripTomlTable(toml, "mcp_servers.argue").trimEnd()}\n\n${block}`.replace(/^\n+/, ""));
         return [file];
       },

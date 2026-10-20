@@ -6,7 +6,7 @@ import { lastJsonObject, run, shell, tail, unaborted, withScope } from "./exec.j
 import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "./git.js";
 import * as P from "./prompts.js";
 import { writeJson } from "./fsx.js";
-import { describe, lineupNote } from "./models.js";
+import { describe, lineupCard, lineupNote } from "./models.js";
 import { renderReport } from "./report.js";
 
 export function newRunId() {
@@ -98,6 +98,7 @@ async function argueInner(opts) {
     scratch,
   };
   meta.note = lineupNote(meta.agents);
+  meta.display = lineupCard(meta.agents);
   writeJson(join(runDir, "meta.json"), { ...meta, status: "running", startedAt: new Date().toISOString(), pid: process.pid });
   emit({ type: "start", ...meta });
 
