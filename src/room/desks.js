@@ -22,11 +22,17 @@ export const ANSWER_FILE = ".argue/answer.md";
 export const ROOM_DIR = ".argue/room";
 export const LAB_DIR = ".argue/lab";
 
-export async function openDesk(ws, path) {
-  const start = await addWorktree(ws, path);
-  mkdirSync(join(path, ROOM_DIR), { recursive: true });
-  return { path, start, lab: null, patch: "", answer: "" };
+/**
+ * Create a desk. `desk` is registered by the caller before this starts, so a desk that is half-made
+ * when a cancel lands is still known, and cleaned up.
+ */
+export async function openDesk(ws, desk) {
+  desk.start = await addWorktree(ws, desk.path);
+  mkdirSync(join(desk.path, ROOM_DIR), { recursive: true });
+  return desk;
 }
+
+export const newDesk = (path) => ({ path, start: null, lab: null, patch: "", answer: "" });
 
 export async function closeDesk(ws, desk) {
   if (desk.lab) await removeWorktree(ws, desk.lab.path).catch(() => {});
@@ -35,9 +41,9 @@ export async function closeDesk(ws, desk) {
 
 /** A clean copy of the project inside the desk, for applying and testing other agents' patches. */
 export async function readyLab(ws, desk) {
-  if (desk.lab) return resetWorktree(ws, desk.lab.path, desk.lab.start);
-  const path = join(desk.path, LAB_DIR);
-  desk.lab = { path, start: await addWorktree(ws, path) };
+  if (desk.lab?.start) return resetWorktree(ws, desk.lab.path, desk.lab.start);
+  desk.lab = { path: join(desk.path, LAB_DIR), start: null }; // known before it exists, for cleanup
+  desk.lab.start = await addWorktree(ws, desk.lab.path);
 }
 
 /** Copy the room into a desk: the record and everyone's current work. */
