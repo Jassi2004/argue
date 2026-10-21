@@ -39,7 +39,10 @@ export function run(cmd, args = [], { cwd, input, timeoutMs = 0, env } = {}) {
     const store = scope.getStore();
     const signal = store?.signal;
     store?.onSpawn?.(child.pid, true);
-    const onAbort = () => killTree(child);
+    // On Windows the kill is a separate taskkill process: wait for it, or the agent's process may still be
+    // running in (and locking) its folder when the caller cleans up.
+    let killing = null;
+    const onAbort = () => (killing ??= killTree(child));
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });
@@ -50,7 +53,7 @@ export function run(cmd, args = [], { cwd, input, timeoutMs = 0, env } = {}) {
     const timer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          killTree(child);
+          killing ??= killTree(child);
         }, timeoutMs)
       : null;
     const done = (code, extra = "") => {
@@ -58,7 +61,9 @@ export function run(cmd, args = [], { cwd, input, timeoutMs = 0, env } = {}) {
       signal?.removeEventListener("abort", onAbort);
       store?.onSpawn?.(child.pid, false);
       live.delete(child);
-      resolve({ code, stdout, stderr: stderr + extra, timedOut });
+      const result = { code, stdout, stderr: stderr + extra, timedOut };
+      if (killing) killing.then(() => resolve(result));
+      else resolve(result);
     };
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
@@ -93,15 +98,22 @@ export function winEscapeArg(arg, doubleEscape = false) {
   return doubleEscape ? s.replace(META, "^$1") : s;
 }
 
-/** Stop a child and everything it started. SIGTERM first, SIGKILL if it is still around 5s later. */
+/**
+ * Stop a child and everything it started. Unix: SIGTERM, then SIGKILL if it's still around 5s later.
+ * Windows: taskkill the whole tree. Resolves once the kill has been carried out.
+ */
 function killTree(child) {
-  if (!child.pid) return;
-  if (isWin) {
-    try {
-      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }).on("error", () => {});
-    } catch {}
-    return;
-  }
+  if (!child.pid) return Promise.resolve();
+  if (isWin)
+    return new Promise((resolve) => {
+      try {
+        const k = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        k.on("error", resolve);
+        k.on("exit", resolve);
+      } catch {
+        resolve();
+      }
+    });
   const signal = (sig) => {
     try {
       process.kill(-child.pid, sig);
@@ -113,6 +125,7 @@ function killTree(child) {
   };
   signal("SIGTERM");
   setTimeout(() => signal("SIGKILL"), 5000).unref();
+  return Promise.resolve();
 }
 
 /** Kill every child process we started (used on forced exit). Synchronous, safe inside process.on("exit"). */
