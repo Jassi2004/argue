@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ask } from "../agents/drivers.js";
@@ -31,7 +31,9 @@ export async function runRoom(opts) {
   const started = Date.now();
   const timeoutMs = timeout * 60_000;
 
-  const scratch = join(tmpdir(), "argue", `${basename(cwd).replace(/[^\w.-]/g, "_")}-${runId}`);
+  // The real, long-form temp path: Windows temp folders often use short 8.3 names (RUNNER~1), and git
+  // must see the same spelling of a worktree's path every time to match it.
+  const scratch = join(realpathSync.native(tmpdir()), "argue", `${basename(cwd).replace(/[^\w.-]/g, "_")}-${runId}`);
   mkdirSync(scratch, { recursive: true });
   let ws;
   try {
@@ -191,10 +193,16 @@ export async function runRoom(opts) {
       check: w?.check ?? null,
     });
   };
-  /** Play turns at the same time. `list`: [[player, prompt], …]. */
-  const playAll = (list, kind) => {
+  /**
+   * Play turns at the same time. `list`: [[player, prompt], …]. Waits for every turn to finish, even
+   * when one fails or the run is cancelled, so no agent is still running (and holding its desk's
+   * files open, which blocks cleanup on Windows) when the run cleans up.
+   */
+  const playAll = async (list, kind) => {
     for (const [p] of list) inFlight.add(p.id);
-    return Promise.all(list.map(([p, prompt]) => turn(p, prompt, kind).finally(() => inFlight.delete(p.id))));
+    const done = await Promise.allSettled(list.map(([p, prompt]) => turn(p, prompt, kind).finally(() => inFlight.delete(p.id))));
+    const failed = done.find((r) => r.status === "rejected");
+    if (failed) throw failed.reason;
   };
 
   /** Read an agent's work after its turn; keep its last good version if the turn broke it. */
@@ -253,7 +261,7 @@ export async function runRoom(opts) {
   return withScope({ signal: local.signal, env: { ARGUE_DEPTH: String(depth) }, onSpawn }, async () => {
     try {
       // ---------- desks ----------
-      for (const p of players) desks[p.id] = await D.openDesk(ws, join(scratch, p.id));
+      for (const p of players) await D.openDesk(ws, (desks[p.id] = D.newDesk(join(scratch, p.id))));
 
       // ---------- opening ----------
       emit({ type: "phase", name: "opening", round: 0, players: letters });
@@ -306,7 +314,7 @@ export async function runRoom(opts) {
       let unresolved = null;
       if (!overBudget()) {
         emit({ type: "phase", name: "verdict", round: room.round });
-        bench = await D.openDesk(ws, join(scratch, "verdict"));
+        await D.openDesk(ws, (bench = D.newDesk(join(scratch, "verdict"))));
         D.syncRoom(bench, mirror());
         const prompt = P.verdict({ task, check, mode, outcome, standings: standingsText(room, pool) });
         const t0 = Date.now();

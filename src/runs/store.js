@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { killPid, run as exec } from "../util/exec.js";
@@ -222,7 +222,7 @@ export async function reap(run) {
   }
   killChildren(run.path);
   rmSync(join(run.path, "pids"), { force: true });
-  const base = join(tmpdir(), "argue");
+  const base = join(realpathSync.native(tmpdir()), "argue");
   const scratch =
     run.meta.scratch ??
     (existsSync(base)

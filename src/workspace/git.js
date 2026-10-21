@@ -253,16 +253,18 @@ export async function resetWorktree(ws, path, start) {
 
 export function removeWorktree(ws, path) {
   return serial(async () => {
+    // A `git worktree add` killed midway (e.g. by a cancel) leaves its entry locked ("initializing"),
+    // and prune never removes locked entries.
+    await run("git", ["worktree", "unlock", path], { cwd: ws.root });
     await run("git", ["worktree", "remove", "--force", "--force", path], { cwd: ws.root });
-    // If git could not remove it (e.g. a file still locked on Windows), delete the folder ourselves, then prune.
-    if (existsSync(path)) {
-      for (let i = 0; i < 10 && existsSync(path); i++) {
-        try {
-          rmSync(path, { recursive: true, force: true });
-        } catch {
-          await new Promise((r) => setTimeout(r, 300));
-        }
-      }
+    // If git could not remove it, delete the folder ourselves, then prune. On Windows a just-killed
+    // process (or a virus scanner) can hold files for a moment, and a delete may only be "pending"
+    // without throwing, so wait between attempts whenever the folder is still there.
+    for (let i = 0; i < 20 && existsSync(path); i++) {
+      try {
+        rmSync(path, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      } catch {}
+      if (existsSync(path)) await new Promise((r) => setTimeout(r, Math.min(200 * (i + 1), 1000)));
     }
     await run("git", ["worktree", "prune"], { cwd: ws.root });
   });
