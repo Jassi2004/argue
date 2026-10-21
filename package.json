@@ -1,6 +1,6 @@
 {
   "name": "argue-ai",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Several AI models (Claude, GPT, Gemini, …) argue it out; you get one carefully vetted answer. Works from Claude Code, Codex, Cursor, Pi, OpenCode or the terminal.",
   "type": "module",
   "bin": {
