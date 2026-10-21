@@ -44,8 +44,9 @@ const TOOLS = [
         },
         judge: { type: "string", description: "Agent that writes the final answer. Omit to auto-pick." },
         check: { type: "string", description: 'Acceptance command run in each copy, e.g. "npm test". Omit to auto-detect; "none" to disable.' },
-        rounds: { type: "number", description: "Most discussion rounds after the opening (default 4; rooms usually settle sooner)." },
-        budget: { type: "number", description: "USD budget (enforced for CLIs that report cost)." },
+        rounds: { type: "number", description: "Most rounds after the opening (default 4; rooms usually settle sooner)." },
+        budget: { type: "number", description: "USD cap for this run (default 10; 0 = no cap). Counted for CLIs that report cost." },
+        minutes: { type: "number", description: "No new round starts after this many minutes (default 60)." },
         apply: { type: "boolean", description: "Apply the code change to the working tree when done (default false)." },
       },
       required: ["task", "cwd"],
@@ -86,7 +87,7 @@ const TOOLS = [
     name: "argue_lineup",
     annotations: { title: "Show or set argue lineup", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description:
-      'Call this FIRST in every argue session and show the user the returned `display` as-is. Shows who will argue (model, effort, harness): the default lineup, or the models the user named for this run. With save=true it checks and saves a new default. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
+      'Call this FIRST in every argue session and show the user the returned `display` as-is. Shows who will argue (model, effort, harness) and the limits (rounds, minutes, $ cap): the defaults, or what the user named for this run. With save=true it checks and saves a new default. Setting checks that each model and effort is available first, then saves it as the user\'s default. Format: comma-separated agent[:model][@effort], e.g. "claude:opus@high,codex:gpt-5@medium,pi". Harnesses: claude, codex, gemini, cursor, opencode, pi.',
     inputSchema: {
       type: "object",
       properties: {
@@ -96,9 +97,13 @@ const TOOLS = [
           description:
             'Models and/or harnesses the user named, e.g. "opus,gpt-6.1-sol@high" or "claude,codex". With save=false (default) it only shows them for this run; pass the same value to argue_start.',
         },
+        budget: { type: "number", description: "USD cap per run the user asked for (0 = no cap)." },
+        rounds: { type: "number", description: "Most rounds the user asked for." },
+        minutes: { type: "number", description: "Time limit in minutes the user asked for." },
         save: {
           type: "boolean",
-          description: "Only when the user says 'from now on' / 'make it default': check the models exist and save as the default lineup.",
+          description:
+            "Only when the user says 'from now on' / 'make it default': check the models exist and save the models and limits as defaults. Without it, nothing is saved: pass the same values to argue_start.",
         },
         reset: { type: "boolean", description: "Go back to the automatic lineup." },
       },
@@ -202,6 +207,7 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
       if (a.check) args.push("--check", a.check);
       if (a.rounds != null) args.push("--rounds", String(a.rounds));
       if (a.budget != null) args.push("--budget", String(a.budget));
+      if (a.minutes != null) args.push("--minutes", String(a.minutes));
       if (a.context) args.push(`--context=${a.context}`);
       if (a.apply) args.push("--apply");
       const started = startDetached({ cwd, args });
@@ -252,7 +258,8 @@ export async function callTool(name, a, progressToken, progress = () => {}) {
 
 async function lineupTool(cwd, a) {
   const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
-  const res = await manageLineup(top.code === 0 ? top.stdout.trim() : cwd, { agents: a.agents, reset: a.reset, save: Boolean(a.save) });
+  const limits = { budget: a.budget, rounds: a.rounds, minutes: a.minutes };
+  const res = await manageLineup(top.code === 0 ? top.stdout.trim() : cwd, { agents: a.agents, reset: a.reset, save: Boolean(a.save), limits });
   if (res.saved === false) return { ...res, next: "Tell the user which model or effort is not available and ask what to use instead." };
   return res;
 }

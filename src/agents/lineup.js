@@ -159,13 +159,51 @@ export function lineupNote(descs) {
   return `Arguing with ${parts.join(", ")}. Want different models? Stop me and say so.`;
 }
 
+/** "up to 4 rounds · 60 min · $10" */
+export function limitsText({ rounds, minutes, budget } = {}) {
+  const cap = budget > 0 ? `$${budget}` : "no $ cap";
+  return `up to ${rounds} rounds · ${minutes} min · ${cap}`;
+}
+
+/** The info note shown when a run starts: more models cost more, these are the limits, how to change them. */
+export function limitsNote(limits) {
+  const cap = limits?.budget > 0 ? " The $ cap counts what Claude Code, OpenCode and Pi report; Codex, Gemini and Cursor bill your plan." : "";
+  return `Several models will each work on this, so it costs more and takes longer than asking one. Limits: ${limitsText(limits)}.${cap}`;
+}
+
 /**
- * The lineup as a markdown card for host agents to show at the very start of an argue session.
- * Rendered by Claude Code, Codex, Pi, OpenCode, Cursor and Gemini as a small table.
+ * The lineup and limits as a markdown card, for host agents to show at the very start of an argue session.
+ * Rendered by Claude Code, Codex, Pi, OpenCode, Cursor and Gemini as a small list.
  */
-export function lineupCard(descs) {
+export function lineupCard(descs, limits) {
   const rows = descs.map((d) => `- **${d.model ?? "account default model"}** · effort ${d.effortSupported ? (d.effort ?? "default") : "n/a"} · ${d.harness}`);
-  return ["**⚔️ Arguing with:**", ...rows, "", "_Want different models? Stop me and say so._"].join("\n");
+  const info = limits ? ["", `ℹ️ ${limitsNote(limits)}`] : [];
+  return ["**⚔️ Arguing with:**", ...rows, ...info, "", '_Want other models or limits? Just say so (e.g. "use opus and gemini", "cap it at $3")._'].join("\n");
+}
+
+/** The limits a run will use: settings, then this run's overrides. */
+export function runLimits(config, over = {}) {
+  const pick = (k) => (over[k] != null && over[k] !== "" ? over[k] : config[k]);
+  const budget = pick("budget");
+  return { rounds: Number(pick("rounds")), minutes: Number(pick("minutes")), budget: budget == null || budget === "none" ? null : Number(budget) };
+}
+
+const LIMIT_RANGES = { rounds: [0, 10], minutes: [1, 1440], budget: [0.01, 10000] };
+/** Validate limit overrides; "none" removes the $ cap. */
+export function checkLimits(over = {}) {
+  const out = {};
+  for (const [k, [min, max]] of Object.entries(LIMIT_RANGES)) {
+    const v = over[k];
+    if (v == null || v === "") continue;
+    if (k === "budget" && (v === "none" || v === 0 || v === "0")) {
+      out.budget = "none";
+      continue;
+    }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < min || n > max) throw new Error(`--${k} must be a number between ${min} and ${max}${k === "budget" ? ' (or "none")' : ""}`);
+    out[k] = k === "rounds" ? Math.floor(n) : n;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- validation
@@ -260,28 +298,37 @@ export async function checkAgent(agent, { drivers = DRIVERS, installed }) {
  *   { agents?: "claude:opus,codex@high", reset?: true }
  * -> { lineup, source, note } | { saved: false, errors }
  */
-export async function manageLineup(root, { agents: spec, reset, save = true } = {}) {
-  const config = loadConfig(root);
+export async function manageLineup(root, { agents: spec, reset, save = true, limits: over = {} } = {}) {
+  let config = loadConfig(root);
   const drivers = registry(config);
   const installed = await detect(drivers);
   const path = userConfigPath();
   const saved = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+  const changes = checkLimits(over);
+  if (save && Object.keys(changes).length) {
+    // "From now on" limits: saved as the user's defaults.
+    for (const [k, v] of Object.entries(changes)) saved[k] = v === "none" ? null : v;
+    writeConfig(path, saved);
+    config = loadConfig(root);
+  }
+  const limits = runLimits(config, save ? {} : changes);
   const view = (agents, source, extra = {}) => {
     const lineup = agents.map((a) => describe(a, { drivers, cwd: root }));
-    return { ...extra, lineup, source, note: lineup.length ? lineupNote(lineup) : null, display: lineup.length ? lineupCard(lineup) : null };
+    return { ...extra, lineup, source, limits, note: lineup.length ? lineupNote(lineup) : null, display: lineup.length ? lineupCard(lineup, limits) : null };
   };
   const automatic = () => parseAgents(defaultLineup(Object.keys(installed)) || [], drivers);
 
   if (reset) {
-    delete saved.agents;
+    for (const k of ["agents", "budget", "rounds", "minutes"]) delete saved[k];
     writeConfig(path, saved);
     return view(automatic(), "automatic", { reset: true });
   }
   if (!spec) {
-    if (config.agents) return view(parseAgents(config.agents, drivers), "saved");
+    const limitsSaved = save && Object.keys(changes).length ? { saved: true } : {};
+    if (config.agents) return view(parseAgents(config.agents, drivers), "saved", limitsSaved);
     const auto = automatic();
     if (!auto.length) throw new Error("no agent CLIs found; run argue doctor");
-    return view(auto, "automatic");
+    return view(auto, "automatic", limitsSaved);
   }
 
   const agents = parseAgents(spec, drivers);

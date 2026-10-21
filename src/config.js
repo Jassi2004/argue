@@ -11,7 +11,7 @@ export const DEFAULTS = {
   judge: null, // who writes the final answer; null = auto (prefers a CLI that is not in the room)
   check: "auto", // "auto" = detect from the project, "none" = no check
   rounds: 4, // most discussion rounds after the opening (rooms usually settle sooner)
-  budget: null, // USD; only enforced for CLIs that report cost
+  budget: 10, // USD per run; counted for CLIs that report cost (Claude Code, OpenCode, Pi); null = no cap
   timeout: 20, // minutes per agent turn
   minutes: 60, // a run starts no new round after this many minutes
   mode: "auto", // "auto" = guess from the task; "code" = agents change files; "answer" = agents argue out an answer

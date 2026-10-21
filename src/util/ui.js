@@ -30,7 +30,8 @@ export function progressPrinter(write = (s) => process.stdout.write(`${s}\n`), {
         }
         if (new Set(e.agents.map((a) => a.harness)).size === 1)
           write(dim("   tip: models from different labs catch more of each other's mistakes (argue doctor shows what's installed)"));
-        write(dim("   want different models? Ctrl-C and run again with -a, e.g. -a opus,gpt-6.1-sol@high"));
+        if (e.limits) write(`   ${yellow("ℹ")} ${e.limits}`);
+        write(dim("   other models or limits? Ctrl-C and run again with -a / -b / -r, e.g. -a opus,gpt-6.1-sol@high -b 5"));
         break;
       }
       case "phase": {

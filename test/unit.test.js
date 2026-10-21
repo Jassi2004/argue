@@ -14,7 +14,7 @@ import {
   parseAgents,
   registry,
 } from "../src/agents/drivers.js";
-import { describe, harnessDefaults, label, lineupCard, lineupNote } from "../src/agents/lineup.js";
+import { checkLimits, describe, harnessDefaults, label, limitsText, lineupCard, lineupNote, runLimits } from "../src/agents/lineup.js";
 import { guessMode } from "../src/cli.js";
 import { stripTomlTable } from "../src/integrations/install.js";
 import { localizePaths, modifiedTests } from "../src/room/desks.js";
@@ -486,6 +486,20 @@ test("describe, label, the lineup note, card and box", () => {
   const box = lineupBox(descs).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
   assert.match(box.join("\n"), /A {3}Claude Code {3}sonnet/);
   assert.equal(new Set(box.map((l) => l.length)).size, 1, "box lines line up");
+});
+
+test("limits: defaults, this run's overrides, validation, and the info note on the lineup card", () => {
+  const config = { rounds: 4, minutes: 60, budget: 10 };
+  assert.deepEqual(runLimits(config), { rounds: 4, minutes: 60, budget: 10 });
+  assert.deepEqual(runLimits(config, checkLimits({ budget: "3", rounds: "2" })), { rounds: 2, minutes: 60, budget: 3 });
+  assert.equal(runLimits(config, checkLimits({ budget: "none" })).budget, null);
+  assert.equal(runLimits(config, checkLimits({ budget: 0 })).budget, null, "0 means no cap");
+  assert.throws(() => checkLimits({ rounds: "lots" }), /--rounds must be a number/);
+  assert.throws(() => checkLimits({ budget: -5 }), /--budget must be/);
+  assert.equal(limitsText({ rounds: 4, minutes: 60, budget: null }), "up to 4 rounds · 60 min · no $ cap");
+  const card = lineupCard([{ harness: "Codex", model: "gpt-6", effort: "high", effortSupported: true }], { rounds: 4, minutes: 60, budget: 10 });
+  assert.match(card, /ℹ️ Several models will each work on this, so it costs more[\s\S]*up to 4 rounds · 60 min · \$10/);
+  assert.match(card, /Want other models or limits\? Just say so/);
 });
 
 // ---------------------------------------------------------------- small helpers

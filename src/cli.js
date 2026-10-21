@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { defaultJudge, defaultLineup, detect, parseAgents, registry, sharedServers } from "./agents/drivers.js";
-import { describe, harnessDefaults, lineupNote, manageLineup } from "./agents/lineup.js";
+import { checkLimits, describe, harnessDefaults, limitsText, lineupNote, manageLineup, runLimits } from "./agents/lineup.js";
 import { detectCheck, loadConfig } from "./config.js";
 import { install } from "./integrations/install.js";
 import { startMcpServer, summarize } from "./integrations/mcp.js";
@@ -32,14 +32,15 @@ ${bold("After a run")}
 
 ${bold("Setup")}
   argue doctor                    your agent CLIs, their default models, the lineup, shared tools
-  argue lineup [a,b,…]            show or save the default lineup, e.g. opus,gpt-6.1-sol@high
+  argue lineup [a,b,…] [-b -r]    show or save your defaults: models, $ cap, rounds (e.g. argue lineup opus,codex -b 5)
   argue install / uninstall       connect argue to your coding agents, or remove it
 
 ${bold("Options")}
   -a, --agents <list>    who argues: models (opus,gpt-6.1-sol@high), CLIs (claude,codex) or claude:sonnet
   -c, --check <cmd>      command that proves a code change works (auto-detected; "none" to skip)
-  -r, --rounds <n>       most rounds of discussion after the opening (default 4; rooms usually settle sooner)
-  -b, --budget <usd>     spending cap (enforced for CLIs that report cost: Claude Code, OpenCode, Pi)
+  -r, --rounds <n>       most rounds after the opening (default 4; rooms usually settle sooner)
+  -b, --budget <usd>     $ cap per run (default 10; "none" for no cap). Counted for CLIs that report cost
+      --minutes <n>      no new round starts after this (default 60)
   -m, --mode <mode>      code (agents change files) or answer (agents argue out an answer); default: guessed
   -f, --file <path>      read the task from a file ("-" for stdin)
       --apply            apply the change automatically when done
@@ -216,11 +217,11 @@ async function runTask(cwd, rest, o) {
   if (check === "none" || check === false || check === "") check = null;
   else if (check === "auto" || check == null) check = mode === "code" ? detectCheck(root) : null;
 
-  const rounds = Math.floor(num(o.rounds ?? config.rounds, "rounds", 0, 10));
-  const budgetRaw = o.budget ?? config.budget;
-  const budget = budgetRaw == null || budgetRaw === "" ? undefined : num(budgetRaw, "budget", 0.01, 10000);
+  const limits = runLimits(config, checkLimits({ rounds: o.rounds, budget: o.budget, minutes: o.minutes }));
+  checkLimits(limits); // settings files are checked too
+  const { rounds, minutes } = limits;
+  const budget = limits.budget ?? undefined;
   const timeout = num(o.timeout ?? config.timeout, "timeout", 1, 600);
-  const minutes = num(o.minutes ?? config.minutes, "minutes", 1, 1440);
 
   if (o.bg) {
     // Rebuild the child's arguments from resolved settings; the task goes through a file so nothing in it is parsed as flags.
@@ -229,7 +230,7 @@ async function runTask(cwd, rest, o) {
     writeFileSync(taskFile, task);
     const args = ["-f", taskFile, "--mode", mode, "--agents", agents.map((a) => a.name).join(","), "--judge", judge.name];
     args.push("--check", check ?? "none", "--rounds", String(rounds), "--timeout", String(timeout), "--minutes", String(minutes));
-    if (budget) args.push("--budget", String(budget));
+    args.push("--budget", budget ? String(budget) : "none");
     if (o.context) args.push(`--context=${o.context}`);
     if (o.apply) args.push("--apply");
     if (o.keep) args.push("--keep");
@@ -392,7 +393,8 @@ async function doctor(cwd, o = {}) {
 async function lineupCmd(cwd, rest, o) {
   const spec = rest.join(",").trim();
   if (spec && !o.preview && !o.json) process.stdout.write(dim("checking each model is available…\n"));
-  const res = await manageLineup(await projectRoot(cwd), { agents: spec || undefined, reset: o.reset, save: !o.preview });
+  const limits = { budget: o.budget, rounds: o.rounds, minutes: o.minutes };
+  const res = await manageLineup(await projectRoot(cwd), { agents: spec || undefined, reset: o.reset, save: !o.preview, limits });
   if (o.json) {
     if (res.saved === false) process.exitCode = 1;
     return console.log(JSON.stringify(res, null, 2));
@@ -402,8 +404,9 @@ async function lineupCmd(cwd, rest, o) {
   if (res.saved) console.log(`${green("✓")} saved as your default lineup`);
   if (res.overriddenByProject) console.log(yellow("note: this project's .argue.json sets its own agents, which override your default here"));
   for (const line of lineupBox(res.lineup)) console.log(line);
+  console.log(`  limits: ${limitsText(res.limits)}`);
   console.log(
-    dim(`  ${res.source === "saved" ? "your saved default" : "automatic (from installed CLIs)"} · change: argue lineup <a,b,…> · reset: argue lineup --reset`),
+    dim(`  ${res.source === "saved" ? "your saved default" : "automatic"} · change: argue lineup <a,b,…> [-b usd] [-r rounds] · reset: argue lineup --reset`),
   );
 }
 

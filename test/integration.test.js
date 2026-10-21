@@ -336,7 +336,7 @@ test("every run records the lineup's CLI, model and effort; the start note has n
   assert.match(meta.note, /^Arguing with account default model \(effort n\/a, good\), account default model \(effort n\/a, bad\)\./);
   assert.doesNotMatch(meta.note, /judge/i);
   assert.equal(meta.agents[0].harness, "good");
-  assert.match(meta.display, /Arguing with/);
+  assert.match(meta.display, /Arguing with[\s\S]*costs more[\s\S]*up to 0 rounds · 60 min · no \$ cap/);
 });
 
 // ---------------------------------------------------------------- the CLI
@@ -651,6 +651,12 @@ process.exit(1);
   assert.equal(doc.lineupSource, "saved");
   assert.equal(doc.harnesses.find((h) => h.agent === "codex").model, "gpt-a");
   assert.match(run("doctor").stdout, /B +Codex +gpt-b +low/);
+  const limits = JSON.parse(run("lineup", "-b", "3", "-r", "2", "--json").stdout);
+  assert.deepEqual([limits.saved, limits.limits.budget, limits.limits.rounds], [true, 3, 2], "limits are saved as defaults");
+  assert.match(limits.display, /up to 2 rounds · 60 min · \$3/);
+  const preview = JSON.parse(run("lineup", "-b", "none", "--preview", "--json").stdout);
+  assert.equal(preview.limits.budget, null, "a preview shows this run's override");
+  assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).budget, 3, "a preview saves nothing");
   assert.equal(run("lineup", "--reset").status, 0);
   assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, undefined);
 });

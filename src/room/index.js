@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ask } from "../agents/drivers.js";
-import { describe, label, lineupCard, lineupNote } from "../agents/lineup.js";
+import { describe, label, limitsNote, lineupCard, lineupNote } from "../agents/lineup.js";
 import { lastJsonObject, unaborted, withScope } from "../util/exec.js";
 import { removeTree } from "../util/fs.js";
 import { applyPatch, diffFiles, diffStats, ignoreArgueDir, openWorkspace } from "../workspace/git.js";
@@ -77,8 +77,13 @@ export async function runRoom(opts) {
     project: ws.home,
     runDir,
     scratch,
+    minutes,
     note: lineupNote(players.map((p) => p.desc)),
-    display: lineupCard(players.map((p) => p.desc)),
+    limits: limitsNote({ rounds, minutes, budget }),
+    display: lineupCard(
+      players.map((p) => p.desc),
+      { rounds, minutes, budget },
+    ),
   };
   const record = openRecord(runDir, meta);
   const emit = (ev) => onEvent(record.emit(ev));

@@ -66,9 +66,24 @@ argue "fix the failing login test"
 
 You watch the room live, then get one answer. Your files never change until you run `argue apply`.
 
-**Or, from your AI tool:** in Claude Code, Codex, Cursor, Pi, OpenCode or Gemini, just say:
+**Or, from inside your AI tool.** In Claude Code, Codex, Cursor, Pi, OpenCode or Gemini, when you doubt a proposal, just say:
 
-> argue this: which database should we use?
+> argue this proposal with other models
+
+Your tool writes up the proposal and what you've discussed for the other models, shows who will argue and the limits, and starts right away:
+
+```
+⚔️ Arguing with:
+- sonnet · effort default · Claude Code
+- gpt-6.1-sol · effort high · Codex
+
+ℹ️ Several models will each work on this, so it costs more and takes longer than asking one.
+   Limits: up to 4 rounds · 60 min · $10.
+
+Want other models or limits? Just say so (e.g. "use opus and gemini", "cap it at $3").
+```
+
+It's only a note: nothing waits for you. Say "use opus too" or "cap it at $3" at any time and the run restarts with that. Add "from now on" to make it your default.
 
 ## 4. After you get an answer
 
@@ -101,10 +116,11 @@ argue "your question" -a opus,gpt-6.1-sol
 - **Thinking effort:** add `@high` or `@low` (e.g. `gpt-6.1-sol@high`). Works with Claude Code, Codex and Pi.
 - **Only one tool?** Use two of its models (`claude:opus,claude:sonnet`) or the same one twice. It works, but models from different labs catch more of each other's mistakes.
 
-To change your default lineup:
+To change your defaults:
 
 ```bash
 argue lineup opus,gpt-6.1-sol@high   # checks the models exist, then saves them
+argue lineup -b 5 -r 3               # default $ cap and rounds
 argue lineup --reset                 # back to automatic
 ```
 
@@ -130,7 +146,7 @@ Claude Code and Codex agents then get exactly those. An agent that has a server 
 | `argue watch` | Follow a running room live |
 | `argue cancel` | Stop a run |
 | `argue doctor` | Check your setup |
-| `argue lineup [models]` | Show or change your default models |
+| `argue lineup [models] [-b] [-r]` | Show or change your default models and limits |
 | `argue install` / `uninstall` | Connect argue to your AI tools, or remove it |
 | `argue --help` | All options |
 
@@ -147,7 +163,7 @@ Put settings in `.argue.json` in your project, or in `~/.config/argue/config.jso
 | `agents` | `-a` | picked from your installed tools |
 | `check`: the command that proves a code change works | `-c` | detected (`npm test`, `pytest`, `go test`, …); `"none"` to skip |
 | `rounds`: most rounds after the opening | `-r` | 4 (rooms usually settle sooner) |
-| `budget`: USD cap, for tools that report cost | `-b` | none |
+| `budget`: USD cap per run (`"none"` for no cap) | `-b` | $10, counted for tools that report cost (Claude Code, OpenCode, Pi) |
 | `minutes`: no new round starts after this | `--minutes` | 60 |
 | `timeout`: minutes per agent turn | `-t` | 20 |
 | `mode`: `code` or `answer` | `-m` | guessed from what you ask |
