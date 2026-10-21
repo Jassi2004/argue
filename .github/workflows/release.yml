@@ -1,0 +1,42 @@
+name: release
+# Publishes to npm when a merge to main changes the version in package.json.
+# Uses npm trusted publishing (OIDC): no token is stored in GitHub.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # create the git tag and GitHub release
+  id-token: write # prove to npm that this workflow is allowed to publish
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Is this version already on npm?
+        id: version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if npm view "argue-ai@$v" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"; echo "argue-ai@$v is already published; nothing to do."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "Will publish argue-ai@$v."
+          fi
+      - if: steps.version.outputs.publish == 'true'
+        run: git config --global user.name ci && git config --global user.email ci@example.com && npm test
+      - if: steps.version.outputs.publish == 'true'
+        run: npm publish --provenance --access public
+      - if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ steps.version.outputs.version }}" --target "$GITHUB_SHA" --title "v${{ steps.version.outputs.version }}" --generate-notes
