@@ -751,3 +751,43 @@ test("the user sees one vetted answer (no winner or judge), and can ask follow-u
   assert.equal(ask.status, 0, ask.stderr);
   assert.match(ask.stdout, /Because the record shows the alternatives lost/);
 });
+
+test("never copies a home folder or a huge non-git folder; answers still work there", async () => {
+  const { tooBigToCopy } = await import("../src/workspace/git.js");
+  const { homedir } = await import("node:os");
+  assert.match(tooBigToCopy(homedir()), /home folder/);
+  const big = mkdtempSync(join(tmpdir(), "argue-big-"));
+  for (let i = 0; i < 30; i++) writeFileSync(join(big, `f${i}.txt`), "x");
+  assert.match(tooBigToCopy(big, { limit: { files: 10, bytes: 1e9 } }) ?? "", /too large/);
+  assert.equal(tooBigToCopy(big), null, "a small folder is fine");
+
+  // A question asked from a folder that isn't a project: no copy, the run still answers.
+  const r = await argue({
+    task: "which cache is best?",
+    mode: "answer",
+    agents: agentsOf("good,bad"),
+    judge: judgeOf(),
+    drivers,
+    installed,
+    cwd: homedir(),
+    rounds: 0,
+  }).catch((e) => e);
+  assert.equal(r.status, "done", String(r.message ?? ""));
+  // A code task from the home folder is refused before anything is copied.
+  await assert.rejects(argue({ task: "fix it", agents: agentsOf("good,bad"), judge: judgeOf(), drivers, installed, cwd: homedir(), rounds: 0 }), /home folder/);
+  const { rmSync: rm } = await import("node:fs");
+  rm(join(homedir(), ".argue"), { recursive: true, force: true });
+});
+
+test("removeTree deletes folders with read-only files (like Go's module cache)", { skip: process.platform === "win32" }, async () => {
+  const { removeTree } = await import("../src/util/fs.js");
+  const { chmodSync, mkdirSync } = await import("node:fs");
+  const d = mkdtempSync(join(tmpdir(), "argue-ro-"));
+  mkdirSync(join(d, "mod", "pkg"), { recursive: true });
+  writeFileSync(join(d, "mod", "pkg", "a.go"), "x");
+  chmodSync(join(d, "mod", "pkg", "a.go"), 0o444);
+  chmodSync(join(d, "mod", "pkg"), 0o555);
+  chmodSync(join(d, "mod"), 0o555);
+  removeTree(d);
+  assert.ok(!existsSync(d));
+});

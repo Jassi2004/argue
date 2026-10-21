@@ -1,5 +1,18 @@
-import { appendFileSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  appendFileSync,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { isWin, run } from "../util/exec.js";
 
@@ -45,7 +58,24 @@ async function repoRoot(cwd) {
 
 /** Usually-ignored folders that builds/tests need; symlinked (not copied) into each worktree. */
 const SHARED_DIRS = ["node_modules", ".venv", "venv", ".tox", "vendor/bundle", "Pods", ".gradle"];
-const SKIP_COPY = new Set([".git", ".argue", "node_modules", ".venv", "venv", "__pycache__", ".DS_Store", ".tox", ".gradle", "Pods"]);
+const SKIP_COPY = new Set([
+  ".git",
+  ".argue",
+  "node_modules",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".DS_Store",
+  ".tox",
+  ".gradle",
+  "Pods",
+  "go",
+  ".cache",
+  ".npm",
+  ".cargo",
+  ".rustup",
+  "Library",
+]);
 
 /**
  * The user's project as argue sees it.
@@ -53,7 +83,7 @@ const SKIP_COPY = new Set([".git", ".argue", "node_modules", ".venv", "venv", "_
  *  - anything else (plain folder, repo with no commits): a private git snapshot in `scratch`
  * The user's repo is never committed to, and its history is never touched.
  */
-export async function openWorkspace(cwd, scratch) {
+export async function openWorkspace(cwd, scratch, { emptyOk = false } = {}) {
   if (!(await hasGit())) throw new Error("git is required (https://git-scm.com/downloads)");
   const top = await repoRoot(cwd);
   const hasHead = top ? (await run("git", ["rev-parse", "--verify", "HEAD"], { cwd: top })).code === 0 : false;
@@ -69,7 +99,12 @@ export async function openWorkspace(cwd, scratch) {
 
   const root = join(scratch, "source");
   mkdirSync(root, { recursive: true });
-  copyTree(source, root);
+  // Only copy a folder that looks like one project. Running from your home folder, /, or a huge
+  // folder of repos must never copy it all: those runs get an empty workspace instead.
+  const reason = tooBigToCopy(source);
+  if (reason) {
+    if (!emptyOk) throw new Error(`${reason}. Run argue inside a project folder (or a git repo)`);
+  } else copyTree(source, root);
   await git(root, "init", "-q");
   if (top) {
     try {
@@ -80,6 +115,47 @@ export async function openWorkspace(cwd, scratch) {
   await git(root, ...ID, "commit", "-q", "--allow-empty", "--no-verify", "-m", "argue: snapshot");
   const base = await git(root, "rev-parse", "HEAD");
   return { root, source, home: top ?? cwd, isRepo: false, base, untracked: [], shared };
+}
+
+const COPY_LIMIT = { files: 20_000, bytes: 500 * 1024 * 1024 };
+
+/** Why a non-git folder must not be copied (home, root, or too large), or null if it's fine. */
+export function tooBigToCopy(dir, { limit = COPY_LIMIT } = {}) {
+  const real = (() => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return dir;
+    }
+  })();
+  if (real === realpathSync(homedir()) || dirname(real) === real) return `${dir} is your home folder or a drive root, not a project`;
+  let files = 0;
+  let bytes = 0;
+  const walk = (d) => {
+    let entries = [];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (SKIP_COPY.has(e.name)) continue;
+      const p = join(d, e.name);
+      if (e.isDirectory()) {
+        if (walk(p)) return true;
+      } else if (e.isFile()) {
+        files++;
+        try {
+          bytes += lstatSync(p).size;
+        } catch {}
+        if (files > limit.files || bytes > limit.bytes) return true;
+      }
+    }
+    return false;
+  };
+  return walk(real)
+    ? `${dir} is too large to copy (over ${limit.files.toLocaleString("en-US")} files or ${limit.bytes / 1024 / 1024} MB) and isn't a git repo`
+    : null;
 }
 
 function copyTree(from, to) {

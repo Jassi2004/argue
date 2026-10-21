@@ -5,7 +5,7 @@ import { ask } from "../harnesses/index.js";
 import { lastJsonObject, run, shell, tail, unaborted, withScope } from "../util/exec.js";
 import { addWorktree, applyPatch, diffFiles, diffSince, diffStats, ignoreArgueDir, openWorkspace, removeWorktree, resetWorktree } from "../workspace/git.js";
 import * as P from "../instructions/index.js";
-import { writeJson } from "../util/fs.js";
+import { removeTree, writeJson } from "../util/fs.js";
 import { describe, lineupCard, lineupNote } from "../models/index.js";
 import { renderReport } from "./report.js";
 
@@ -43,7 +43,7 @@ async function argueInner(opts) {
   mkdirSync(scratch, { recursive: true });
   let ws;
   try {
-    ws = await openWorkspace(cwd, scratch);
+    ws = await openWorkspace(cwd, scratch, { emptyOk: mode !== "code" });
   } catch (err) {
     rmQuiet(scratch);
     throw err;
@@ -547,9 +547,7 @@ export function modifiedTests(diff = "") {
 
 /** Best-effort delete (Windows can keep files locked briefly after a process is killed). */
 function rmQuiet(path) {
-  try {
-    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  } catch {}
+  removeTree(path);
 }
 
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { killPid, run as exec } from "../util/exec.js";
-import { writeJson } from "../util/fs.js";
+import { removeTree, writeJson } from "../util/fs.js";
 import { applyPatch, diffFiles } from "../workspace/git.js";
 
 /** Where runs for a project are stored. */
@@ -143,7 +143,7 @@ export async function reap(run) {
           .map((d) => join(base, d))
           .find((d) => d.endsWith(`-${run.id}`))
       : null);
-  if (scratch && existsSync(scratch)) rmSync(scratch, { recursive: true, force: true, maxRetries: 3 });
+  if (scratch && existsSync(scratch)) removeTree(scratch);
   if (run.meta.project) await exec("git", ["worktree", "prune"], { cwd: run.meta.project });
   if (!run.result) writeJsonSafe(join(run.path, "result.json"), { runId: run.id, status: "interrupted", error: "the argue process stopped unexpectedly" });
 }
