@@ -1,33 +1,22 @@
 # argue
 
-**Several AI models argue it out. You get one carefully vetted answer.**
+[![npm](https://img.shields.io/npm/v/argue-ai)](https://www.npmjs.com/package/argue-ai)
+
+**Ask several AI models the same thing. They argue it out. You get one carefully checked answer.**
+
+Use it for questions, decisions, plans, writing, or code changes.
+
+## 1. Install
 
 ```bash
 npm i -g argue-ai
-argue "which database should a social media app use?"
-argue "fix the race condition in ws/reconnect.ts"
 ```
 
-Or, inside Claude Code, Codex, Cursor, Pi and others, just say *"argue this"*. The first time you run argue, it offers to connect itself to them.
+You also need:
+- **Node 20 or newer** and **git**
+- **At least one AI coding tool, logged in.** Two different ones work best.
 
-## How it works
-
-1. argue shows which models will argue (model, effort and harness).
-2. Each model works on it alone, in its own private copy of your project.
-3. They cross-examine each other's work with evidence, then fix what held up.
-4. What survives is combined into one answer for you.
-
-You only see the answer. If the models still disagree on something important, it ends with a short **Note:** saying so. Ask follow-ups any time with `argue ask "why not X?"`. It answers from the full record of the debate.
-
-For code, your files don't change until you say so (`argue apply`).
-
-**Choosing models:** argue uses your default lineup, or the models you name: `argue "…" -a opus,gpt-6.1-sol@high`. You can name a model, a harness, or both (`codex`, `claude:sonnet`). To save a new default, run `argue lineup opus,gpt-6.1-sol`. It checks each model exists first.
-
-## Requirements
-
-Node 20+, git, and at least one of these agent CLIs, logged in:
-
-| Agent | Install |
+| Tool | Install it with |
 |---|---|
 | Claude Code | `npm i -g @anthropic-ai/claude-code` |
 | Codex | `npm i -g @openai/codex` |
@@ -36,78 +25,119 @@ Node 20+, git, and at least one of these agent CLIs, logged in:
 | OpenCode | `npm i -g opencode-ai` |
 | Pi | `npm i -g @earendil-works/pi-coding-agent` |
 
-With only one CLI, argue runs two copies of it. Mixing vendors works better.
-
-## Commands
+## 2. Check your setup
 
 ```bash
-argue "<question or task>"      # get a vetted answer (or code change)
-argue ask "<follow-up>"         # question the last answer
-argue apply                     # apply the last code change
-argue show                      # the full record of the last run
-argue doctor                    # your harnesses, their default models, and the lineup
-argue lineup claude:opus,codex@high   # check and save a new default lineup
-argue install / uninstall       # connect argue to your agents, or remove it
+argue doctor
 ```
 
-Useful options:
+This shows which AI tools argue found, which model each one uses, and which models will argue by default. The first time, it also offers to connect argue to your AI tools. Press **Enter** to say yes.
+
+## 3. Ask something
+
+Run it **inside your project folder**:
 
 ```bash
--a opus,gpt-6.1-sol@high # models for this run: a model, a harness, or harness:model, with optional @effort
--c "npm test"            # the command that proves the task is done (auto-detected)
--r 2                     # rounds of review (default 2)
--b 5                     # budget in USD (for CLIs that report cost)
---bg                     # run in the background; check later with: argue watch
+argue "which database should our social media app use?"
+argue "fix the failing login test"
 ```
 
-`argue --help` lists everything.
+argue first shows which models will argue, then gives you one answer. That's it.
 
-## Default models
+**Or, from your AI tool:** in Claude Code, Codex, Cursor, Pi, OpenCode or Gemini, just say:
 
-`argue doctor` shows each harness with the model and effort it uses by default, plus your lineup.
+> argue this: which database should we use?
+
+## 4. After you get an answer
+
+| You want to… | Run |
+|---|---|
+| Ask a follow-up ("why not MongoDB?") | `argue ask "why not MongoDB?"` |
+| Apply a code change it suggested | `argue apply` |
+| See everything the models said | `argue show` |
+
+Your files never change until you run `argue apply`.
+
+## Choosing models
+
+argue uses your default models. To pick others for one run, add `-a`:
 
 ```bash
-argue lineup                                   # show it
-argue lineup claude:opus@high,codex:gpt-5@low  # check the models exist, then save as default
-argue lineup --reset                           # back to automatic
+argue "your question" -a opus,gpt-6.1-sol
 ```
 
-Effort works with Claude Code, Codex and Pi.
+- **A model name** (`opus`, `gpt-6.1-sol`, `gemini-2.5-pro`): argue finds the right tool for it.
+- **A tool name** (`claude`, `codex`): that tool's usual model.
+- **Thinking effort:** add `@high` or `@low` (e.g. `gpt-6.1-sol@high`). This works with Claude Code, Codex and Pi.
 
-## Safe by default
+To change your default models:
 
-- Agents only work in private copies, never in your project.
-- Nothing is applied until you say so.
-- If a fix breaks something that used to work, argue keeps the earlier version.
-- Ctrl-C stops all agents and cleans up.
-- `argue uninstall` removes everything argue added.
-
-## Changing how the models argue
-
-Everything the models are told is plain text in [`instructions/`](instructions/README.md), one file per step. See [how it works](docs/HOW-IT-WORKS.md) and [contributing](docs/CONTRIBUTING.md).
-
-## Settings (optional)
-
-`argue init` saves your defaults, or you can create `.argue.json` in a project:
-
-```json
-{ "agents": "claude:opus,codex", "check": "npm test", "rounds": 2, "budget": 10 }
+```bash
+argue lineup opus,gpt-6.1-sol@high   # checks the models exist, then saves them
+argue lineup --reset                 # go back to automatic
 ```
+
+## All commands
+
+| Command | What it does |
+|---|---|
+| `argue "<question or task>"` | Get one checked answer, or a code change |
+| `argue ask "<follow-up>"` | Ask about the last answer |
+| `argue apply` | Apply the last code change to your files |
+| `argue show` | Show the full record of the last run |
+| `argue runs` | List past runs |
+| `argue cancel` | Stop a run |
+| `argue doctor` | Check your setup |
+| `argue lineup [models]` | Show or change your default models |
+| `argue install` | Connect argue to your AI tools |
+| `argue uninstall` | Remove argue from your AI tools |
+| `argue --help` | All options |
+
+## Remove argue
+
+```bash
+argue uninstall
+npm uninstall -g argue-ai
+```
+
+## How it works
+
+1. Each model works on your question alone, in its own private copy of your project.
+2. They review each other's work and point out mistakes, with evidence.
+3. Each model fixes what was wrong.
+4. The best of what survives becomes your answer.
+
+If the models still disagree about something important, the answer ends with a short **Note:**.
+
+## Contributing
+
+Everything the models are told is plain text in [`instructions/`](instructions/README.md), one file per step. You can change how they argue without touching code. See [how it works](docs/HOW-IT-WORKS.md) and [contributing](docs/CONTRIBUTING.md).
 
 <details>
-<summary>Advanced</summary>
+<summary>Advanced options</summary>
 
-**Custom agents.** Any CLI can compete:
+**Per-project settings.** Create `.argue.json` in your project:
+
+```json
+{ "agents": "opus,codex", "check": "npm test", "rounds": 2, "budget": 10 }
+```
+
+**Options for a single run:**
+- `-c "npm test"`: the command that proves a code change works (auto-detected)
+- `-r 2`: rounds of review
+- `-b 5`: budget in USD (for tools that report cost)
+- `--bg`: run in the background
+- `--verbose`: show every step
+
+**Custom tools.** Any command-line AI tool can take part:
 
 ```json
 { "custom": { "aider": { "command": "aider --yes-always --message-file {prompt_file}" } } }
 ```
 
-**More options.** `--context "<text>"` shares extra context with every agent, `-t <min>` sets the time limit per agent call (default 20), `--keep` keeps the agents' copies for inspection, and `argue wait <run>` waits for a background run and prints its status as JSON.
+**MCP server.** `argue mcp`; `argue install` sets it up for you.
 
-**MCP server.** `argue mcp` provides the tools `argue_start`, `argue_wait`, `argue_apply`, `argue_cancel`, `argue_runs` and `argue_agents`. `argue install` registers it automatically.
-
-**Where things go.** Run reports go in `<project>/.argue/` (git-ignored automatically). Connections are a skill plus an MCP entry in each agent's config. Settings live in `~/.config/argue/`.
+**Where files go.** Run records go in `<project>/.argue/`, which git ignores automatically. Settings live in `~/.config/argue/`.
 
 </details>
 
