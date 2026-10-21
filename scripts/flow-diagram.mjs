@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "assets", "argue-flow.svg");
-export const LOOP = 18; // seconds
+export const LOOP = 22; // seconds
 
 const C = {
   bg: "#0d1117",
