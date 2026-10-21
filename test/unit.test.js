@@ -549,3 +549,10 @@ test("windows: .cmd shims receive arguments with spaces, quotes and metacharacte
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(JSON.parse(res.stdout.trim()), args);
 });
+
+test("docs/assets/argue-flow.svg is up to date with scripts/flow-diagram.mjs (run npm run diagram)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { svg } = await import("../scripts/flow-diagram.mjs");
+  assert.equal(readFileSync(new URL("../docs/assets/argue-flow.svg", import.meta.url), "utf8"), svg);
+  assert.doesNotMatch(svg, /<script|<foreignObject|@import|url\(http/, "GitHub only animates plain SVG + CSS in images");
+});

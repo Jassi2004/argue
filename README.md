@@ -4,7 +4,12 @@
 
 **Put several AI models in a room. They argue it out. You get the one answer that survived.**
 
-Use it for questions, decisions, plans, writing, or code changes.
+Use it for questions, decisions, plans, writing, or code changes, from any AI tool you already use.
+
+<p align="center">
+  <a href="docs/ARCHITECTURE.md"><img src="docs/assets/argue-flow.svg" width="100%" alt="How argue works: from Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Pi or a terminal, 'argue this' starts one engine. Each model works alone in its own copy of your repo, then they challenge each other, use each other's tools and revise through a shared room until a plain-code referee sees a real agreement. One answer comes back to the tool you asked from."></a>
+</p>
+<p align="center"><sub>What happens under the hood when you say “argue this”. <a href="docs/ARCHITECTURE.md">Read how it works →</a></sub></p>
 
 A real run (`argue "fix the LRU cache in lru.js so the tests pass"`):
 

@@ -1,5 +1,7 @@
 # How argue works
 
+![How argue works](assets/argue-flow.svg)
+
 argue puts several coding agents (Claude Code, Codex, Gemini CLI, Cursor, OpenCode, Pi, or your own) in a **room** on one task. They know they are in a room together. They decide what to do each round; argue only runs the rounds, keeps score, and enforces the few rules that make the result trustworthy and make the run end.
 
 ## A run
