@@ -1,7 +1,7 @@
 {
   "name": "argue-ai",
   "version": "0.2.3",
-  "description": "Several AI models (Claude, GPT, Gemini, …) argue it out; you get one carefully vetted answer. Works from Claude Code, Codex, Cursor, Pi, OpenCode or the terminal.",
+  "description": "Put several AI models (Claude, GPT, Gemini, …) in a room: they challenge each other with evidence until they agree, and you get one vetted answer. Works from Claude Code, Codex, Cursor, Pi, OpenCode or the terminal.",
   "type": "module",
   "bin": {
     "argue": "bin/argue.js"
@@ -18,7 +18,8 @@
     "test": "node --test test/unit.test.js test/integration.test.js test/instructions/instructions.test.js",
     "lint": "npm i --no-save eslint@9 @eslint/js@9 globals@16 prettier@3 && eslint src bin test scripts && prettier --check src bin test scripts",
     "format": "npx -y prettier@3 --write src bin test",
-    "instructions:preview": "node scripts/preview-instructions.mjs"
+    "instructions:preview": "node scripts/preview-instructions.mjs",
+    "diagram": "node scripts/flow-diagram.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -1,40 +1,45 @@
 # Instructions
 
-These are the exact words argue sends to the models. Edit any file to change how they behave. No code needed.
+These are the exact words argue sends to the agents. Edit any file to change how the room behaves. No code needed.
 
 | You want to change… | Edit |
 |---|---|
-| How every model behaves (the ground rules) | [`rules.md`](rules.md) |
-| How a model first tackles the task on its own | [`solve.md`](solve.md) |
-| How hard models push back on each other's work | [`critique.md`](critique.md) |
-| How a model responds to criticism | [`improve.md`](improve.md) |
-| What the final, vetted answer looks like | [`final-answer.md`](final-answer.md) |
-| How follow-up questions ("why not X?") are answered | [`follow-up.md`](follow-up.md) |
+| What every agent knows about the room: the task, how rounds work, the ground rules, its desk | [`room.md`](room.md) |
+| How agents write posts (STANCE, CHALLENGE, ANSWER, ASK…) and how terse they are | [`post-format.md`](post-format.md) |
+| The first turn, where each agent works alone | [`opening.md`](opening.md) |
+| Every later turn: what an agent may do in a round | [`turn.md`](turn.md) |
+| The red-team turn (everyone agrees but nobody has tried to break the work yet) | [`red-team.md`](red-team.md) |
+| The starting angle each agent gets, so the room doesn't think alike | [`lenses.md`](lenses.md) |
+| How the final answer for the user is written | [`verdict.md`](verdict.md) |
+| How follow-up questions (`argue ask "why not X?"`) are answered | [`follow-up.md`](follow-up.md) |
 
-## How they're used
+Every agent turn is `room.md` + `post-format.md` + the step (`opening.md`, `turn.md` or `red-team.md`), in that order. The unchanging part comes first so CLIs that cache prompts can reuse it.
 
-A run goes: **solve** (each model alone) → **critique** (each attacks the others) → **improve** (each fixes what holds up) → repeat critique/improve → **final answer** (one model combines everything). `rules.md` is put in front of every step except the final answer.
+## Three conventions
 
-## Blanks
-
-Words in `{curly braces}` are filled in automatically:
+1. **`{blanks}`** are filled in by argue (table below).
+2. **A line whose blank is empty is left out.** For example, the line with `{check}` disappears when there is no check command.
+3. **`[code]` or `[answer]` at the start of a line** sends that line only when agents change code, or only when they argue out an answer.
 
 | Blank | Filled with |
 |---|---|
-| `{task}` | What the user asked for |
-| `{check}` | The command that proves the task is done (e.g. `npm test`), when there is one |
-| `{approach}` | A nudge to take a different approach, so models don't all do the same thing |
-| `{others}` | The other models' work: their answers, or where to find their code changes |
-| `{feedback}` | What reviewers said about this model's work |
-| `{previous}` | This model's own earlier answer |
-| `{question}` | The user's follow-up question |
-| `{logbook}` | Everything that happened in the run |
+| `{id}`, `{letters}`, `{count}` | This agent's letter, everyone's letters, how many |
+| `{task}` | What the user asked for (plus any context from the user's session) |
+| `{check}` | The command that proves a code change works (e.g. `npm test`) |
+| `{lens}` | This agent's starting angle, from `lenses.md` |
+| `{round}`, `{max_rounds}` | This round's number and the round limit |
+| `{digest}` | The room so far: who backs what, every challenge, older posts as one-line gists, the latest round in full |
+| `{inbox}` | What's addressed to this agent: open challenges against its work, requests, notes from argue |
+| `{target}` | The work the red team should try to break |
+| `{outcome}`, `{standings}` | (verdict) how the room ended; every piece of work with its backers and open challenges |
+| `{record}`, `{question}` | (follow-up) the full record of the run; the user's question |
 
-Sections that start with **"If this is a coding task:"** only matter when the models are editing code. Leave them in place.
+The header lines in `post-format.md` are read by code (`src/room/protocol.js`). You can reword their descriptions freely, but keep the keywords (`STANCE`, `CHALLENGE`, `ANSWER`, `WITHDRAW`, `ASK`, `TOOLS`, `GIST`) and their shape.
 
 ## Trying a change
 
 ```bash
-npm run instructions:preview -- solve   # print the filled-in instruction for a step
-npm test                                # snapshot tests show exactly what your edit changed
+npm run instructions:preview -- turn          # the filled-in text (opening | turn | red-team | verdict | follow-up; add --code)
+UPDATE_SNAPSHOTS=1 npm test                   # record the new text
+git diff test/instructions/snapshots/         # exactly what agents will now receive
 ```

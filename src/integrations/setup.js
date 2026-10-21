@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { userConfigPath } from "../models/config.js";
+import { userConfigPath } from "../config.js";
 import { writeJson } from "../util/fs.js";
 import { install, targets } from "./install.js";
 import { bold, dim, green, red } from "../util/ui.js";

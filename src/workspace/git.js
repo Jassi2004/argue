@@ -196,6 +196,7 @@ function junkExcludes() {
   if (!junkFile) {
     junkFile = join(tmpdir(), `argue-ignore-${process.pid}`);
     writeFileSync(junkFile, `${JUNK.join("\n")}\n`);
+    process.once("exit", () => rmSync(junkFile, { force: true }));
   }
   return ["-c", `core.excludesFile=${junkFile}`];
 }

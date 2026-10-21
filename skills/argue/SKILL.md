@@ -1,64 +1,61 @@
 ---
 name: argue
-description: Get a carefully vetted answer by having several AI models from different labs (Claude, GPT, Gemini, …) work on the same question or task independently, cross-examine each other with evidence, improve, and combine the best into one answer. Use when the user says "argue", asks for several models to debate or cross-check something, wants a second opinion, or the question is hard or high-stakes. Works for any question or task: decisions, design, research, writing, debugging, or code changes.
+description: Have several AI models (Claude, GPT, Gemini, …) argue out a question, proposal, plan, review or code change in a room, challenging each other with evidence until they agree, and return one vetted answer. Use when the user says "argue", "argue this (proposal/plan/approach) with other models", asks for other models' opinion, a second opinion, a debate or a cross-check, doubts an answer or proposal in this conversation, or the decision is hard or high-stakes.
 ---
 
 # argue
 
-argue has several AI models work on the same thing, attack each other's reasoning, and combine what survives into **one vetted answer**. The user only wants that answer: not who won, which model judged, or what it cost.
+argue puts several AI models in a room on one task. They work alone first, then challenge each other with evidence, fix what's wrong, and stop when they genuinely agree or have nothing new to say. The user gets **one vetted answer**.
 
-## 1. Show who will argue (first message)
+Follow these steps in order. Don't ask the user anything before the run starts: it's never blocking.
 
-Before anything else, get the lineup:
-- **MCP:** `argue_lineup` with `cwd` (absolute project path), plus `agents` if the user named models (see step 4). Don't pass `save`.
-- **Shell:** `argue lineup --json`, or `argue lineup <agents> --preview --json` if the user named models (if `argue` isn't on PATH, use `npx -y argue-ai`).
+## 1. Work out what to argue
 
-Your first message to the user must be its `display` field, exactly as-is (don't announce that you're checking first). It looks like:
+"This" means what the user is pointing at in this conversation: usually the latest proposal, plan, design, answer, diff or decision, yours or theirs. If they doubt it ("I don't think this is good"), the question for the room is whether it's right and what would be better. It is not "defend it".
 
-> **⚔️ Arguing with:**
-> - **claude-opus-4-1** · effort high · Claude Code
-> - **gpt-6.1-sol** · effort high · Codex
->
-> _Want different models? Stop me and say so._
+Note anything the user named for this run:
+- **Models:** each item is `model`, `harness` or `harness:model`, optionally `@effort`: `opus`, `gpt-6.1-sol@high`, `gemini-2.5-pro`, `codex`, `claude:sonnet`, `pi:openrouter/deepseek/r1`. Effort exists only for Claude Code (low…max), Codex (minimal…ultra) and Pi (off…max).
+- **Limits:** `budget` (USD), `rounds`, `minutes` ("cap it at $3", "only 2 rounds", "no cost limit" = budget 0).
 
-Then carry on straight away. Don't wait for a reply.
+## 2. Show the lineup and limits (your first message)
 
-## 2. Start it
+- **MCP:** `argue_lineup` with `cwd` (absolute project path) and anything the user named (`agents`, `budget`, `rounds`, `minutes`). Don't pass `save`.
+- **Shell:** `argue lineup [agents] [-b usd] [-r rounds] [--minutes n] --preview --json` (if `argue` isn't on PATH: `npx -y argue-ai`).
 
-The other models can't see this conversation, so write a complete, self-contained brief to a temp file (e.g. `/tmp/argue-brief.md`): what's wanted, what "done" looks like, relevant files or facts, constraints, and what's been tried. Refer to project files by their path relative to the project root.
+Your first message is its `display` field, **exactly as-is**. It lists the models and an ℹ️ note that several models cost more, with this run's limits and how to change them. Don't announce that you're checking first, and don't wait for a reply: go straight to step 3.
 
-- **MCP:** `argue_start` with `task` (the brief) and `cwd`, plus `agents` if the user named models.
-- **Shell** (from the project directory): `argue -f /tmp/argue-brief.md --bg --json`, plus `-a <agents>` if the user named models.
+If it reports a model isn't available, say so (with its suggestions) and continue with the models that are; if fewer than two agents are available, tell the user to run `argue doctor` and stop.
 
-argue works out by itself whether models should change code or just argue out an answer. Only pass `mode: "code"` / `"answer"` if it's ambiguous.
+## 3. Write the brief and start
 
-## 3. Wait, then give the answer
+The other models can't see this conversation, so the brief must stand alone:
+- **The task:** what's being decided or built, and what a great result must get right.
+- **The proposal, verbatim** if there is one (the plan, the design, the code or diff), and the user's doubts about it, as open questions.
+- **Facts from this session:** relevant files (paths relative to the project root), constraints, errors, findings, what's been tried and ruled out.
+- Keep it neutral. Don't tell them which answer you or the user lean towards.
 
-Call `argue_wait` (shell: `argue wait <run_id>`) until `status` is `done`, `failed` or `interrupted`. While waiting, a one-line status now and then is enough.
+Then start it with the same models and limits:
+- **MCP:** `argue_start` with `task` (the brief), `cwd`, `context` (session findings that don't fit the brief), plus `agents`, `budget`, `rounds`, `minutes` if named.
+- **Shell:** write the brief to a temp file, then `argue -f <file> --bg --json [-a agents] [-b usd] [-r rounds] [--minutes n]`.
 
-When it's done, **give the user the `answer` field as your reply.** Keep it as it is: it has already been checked by all the models. Don't add who won, judges, rounds, scores or cost.
+argue works out whether the models should change code or argue out an answer. Reviewing a proposal is an answer. Pass `mode` only if it's ambiguous.
 
-- If it ends with a line starting "Note:", keep it: it flags a real remaining disagreement.
+## 4. While it runs
+
+Call `argue_wait` (shell: `argue wait <run_id>`) until `status` is no longer `running`. Between calls, at most one short line now and then, taken from `recent` (e.g. "B challenged A's caching plan; A is revising"). Don't narrate every call.
+
+**The user can change their mind at any time:**
+- **Other models or limits for this run** ("use opus too", "cap it at $3"): `argue_cancel`, then `argue_lineup` with the new values (show its `display`), then `argue_start` again with the same brief and the new values.
+- **"From now on" / "make that the default":** `argue_lineup` with the values and `save: true` (shell: `argue lineup <agents> -b <usd> -r <rounds>`). It checks the models exist, then saves them. Do this in addition to the restart if a run is going.
+
+## 5. Give the answer
+
+When `status` is `done`, **reply with the `answer` field as-is.** The room has already checked it. Don't add which model said what, rounds, scores or cost.
+- If it ends with a line starting "Note:", keep it: a real disagreement is still open.
 - **Code changes:** the answer describes the change. Ask once: "Apply it?" If yes, `argue_apply` (shell: `argue apply`).
 - If `projectChanged` is true, warn that the project's files changed during the run.
+- If the status is `failed`, `interrupted` or `stuck`, give the error and offer to run it again.
 
-## 4. If the user names models (before or during a run)
+## 6. Follow-up questions
 
-The user can name models, harnesses or both. Each item is `model`, `harness`, or `harness:model`, optionally with `@effort`:
-- `opus`, `gpt-6.1-sol@high`, `gemini-2.5-pro` (argue picks the right harness)
-- `codex`, `claude` (that harness's default model)
-- `pi:openrouter/deepseek/r1` (explicit harness and model)
-
-Effort exists only for Claude Code (low…max), Codex (minimal…ultra) and Pi (off…max). For others, say it isn't supported. Only add `@effort` to the models the user said it for.
-
-- **For this run only** (the normal case): pass them as `agents` to `argue_start` (shell: `-a`). The saved defaults don't change.
-- **Mid-run:** `argue_cancel`, then start again with the same brief and the new `agents`, and show the new lineup.
-- **"From now on" / "make it default":** `argue_lineup` with `agents` and `save: true` (shell: `argue lineup <agents>`). This checks the models exist, then saves them.
-
-If argue reports a model isn't available, tell the user (with its suggestions) and ask what to use instead.
-
-## 5. Follow-up questions
-
-If the user questions or challenges the answer ("why not Postgres?", "are you sure?"), answer from the run's record: `argue ask "<their question>"` (shell). It uses everything the models found. Only start a new run if the user asks to argue it again.
-
-If argue says fewer than two agents are available, tell the user to run `argue doctor`.
+If the user questions the answer ("why not Postgres?", "are you sure?"), answer from the run's record: `argue ask "<question>"` (shell). Start a new run only if they ask to argue it again.
