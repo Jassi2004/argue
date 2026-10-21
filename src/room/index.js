@@ -191,10 +191,16 @@ export async function runRoom(opts) {
       check: w?.check ?? null,
     });
   };
-  /** Play turns at the same time. `list`: [[player, prompt], …]. */
-  const playAll = (list, kind) => {
+  /**
+   * Play turns at the same time. `list`: [[player, prompt], …]. Waits for every turn to finish, even
+   * when one fails or the run is cancelled, so no agent is still running (and holding its desk's
+   * files open, which blocks cleanup on Windows) when the run cleans up.
+   */
+  const playAll = async (list, kind) => {
     for (const [p] of list) inFlight.add(p.id);
-    return Promise.all(list.map(([p, prompt]) => turn(p, prompt, kind).finally(() => inFlight.delete(p.id))));
+    const done = await Promise.allSettled(list.map(([p, prompt]) => turn(p, prompt, kind).finally(() => inFlight.delete(p.id))));
+    const failed = done.find((r) => r.status === "rejected");
+    if (failed) throw failed.reason;
   };
 
   /** Read an agent's work after its turn; keep its last good version if the turn broke it. */

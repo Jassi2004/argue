@@ -280,15 +280,19 @@ test("never copies a home folder or a huge non-git folder; answers still work th
   assert.equal(tooBigToCopy(big), null, "a small folder is fine");
   // Pretend a temp folder is the home folder (never touch the real one).
   const home = mkdtempSync(join(tmpdir(), "argue-fakehome-"));
-  const prev = process.env.HOME;
+  // os.homedir() reads HOME on Unix and USERPROFILE on Windows.
+  const prev = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   try {
     assert.match(tooBigToCopy(home), /home folder/);
     const r = await play(home, "good,bad", { mode: "answer", task: "which cache is best?", rounds: 0 });
     assert.equal(r.status, "done");
     await assert.rejects(play(home, "good,bad", { rounds: 0 }), /home folder/);
   } finally {
-    process.env.HOME = prev;
+    for (const [k, v] of Object.entries(prev))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
   }
 });
 
