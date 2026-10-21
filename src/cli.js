@@ -2,52 +2,50 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { defaultJudge, defaultLineup, detect, parseAgents, registry } from "../harnesses/index.js";
-import { argue } from "../arena/session.js";
-import { startDetached, waitForFinish, waitForStart } from "../arena/background.js";
-import { detectCheck, loadConfig, userConfigPath, writeConfig } from "../models/config.js";
-import { killAll, run } from "../util/exec.js";
-import { hasGit } from "../workspace/git.js";
-import { install } from "../integrations/install.js";
-import { startMcpServer, summarize } from "../integrations/mcp.js";
-import { describe, harnessDefaults, lineupNote, manageLineup } from "../models/index.js";
-import { markSetupDone, maybeOfferSetup } from "../integrations/setup.js";
-import { askAbout } from "../arena/logbook.js";
-import { applyRun, findRun, listRuns, readEvents, reap, reapStale, requestCancel } from "../arena/runs.js";
-import { bold, cyan, dim, green, lineupBox, printResult, progressPrinter, red, yellow } from "../util/ui.js";
-import { VERSION } from "../util/version.js";
+import { defaultJudge, defaultLineup, detect, parseAgents, registry, sharedServers } from "./agents/drivers.js";
+import { describe, harnessDefaults, lineupNote, manageLineup } from "./agents/lineup.js";
+import { detectCheck, loadConfig } from "./config.js";
+import { install } from "./integrations/install.js";
+import { startMcpServer, summarize } from "./integrations/mcp.js";
+import { markSetupDone, maybeOfferSetup } from "./integrations/setup.js";
+import { runRoom } from "./room/index.js";
+import { startDetached, waitForFinish, waitForStart } from "./runs/background.js";
+import { askAbout } from "./runs/followup.js";
+import { applyRun, findRun, listRuns, readEvents, readText, reap, reapStale, requestCancel } from "./runs/store.js";
+import { killAll, run } from "./util/exec.js";
+import { bold, cyan, dim, green, lineupBox, printResult, progressPrinter, red, yellow } from "./util/ui.js";
+import { VERSION } from "./util/version.js";
+import { hasGit } from "./workspace/git.js";
 
-const HELP = `${bold("argue")} — several AI models argue it out; you get one carefully vetted answer.
+const HELP = `${bold("argue")} — put several AI models in a room; they argue it out; you get one vetted answer.
 
 ${bold("Start")}
-  argue "<question or task>"      a vetted answer, or a code change (files change only when you apply)
+  argue "<question or task>"      an answer, or a code change (your files change only when you apply)
 
 ${bold("After a run")}
-  argue ask "<follow-up>"         question the last answer ("why not Postgres?"), using the run's record
+  argue ask "<follow-up>"         question the last answer ("why not Postgres?") from the run's record
   argue apply [run]               apply the code change
-  argue show [run]                the full record of a run (every model's work and the critiques)
+  argue show [run]                the whole debate: every post, challenge and revision
   argue runs                      list past runs
   argue watch [run]               follow a run live
   argue cancel [run]              stop a run
 
 ${bold("Setup")}
-  argue doctor                    see your harnesses, their default models, and the lineup
-  argue lineup [a,b,…]            show or set the default lineup, e.g. claude:opus,codex@high
-  argue install / uninstall       connect argue to your agents, or remove it
-  argue init                      save your default agents and budget
+  argue doctor                    your agent CLIs, their default models, the lineup, shared tools
+  argue lineup [a,b,…]            show or save the default lineup, e.g. opus,gpt-6.1-sol@high
+  argue install / uninstall       connect argue to your coding agents, or remove it
 
 ${bold("Options")}
-  -a, --agents <list>    models for this run: opus,gpt-6.1-sol@high · or harnesses: claude,codex · or claude:sonnet
-  -c, --check <cmd>      command that proves the task is done (auto-detected; "none" to skip)
-  -r, --rounds <n>       rounds of review (default 2)
-  -b, --budget <usd>     spending cap (Claude Code, OpenCode, Pi report cost)
-  -j, --judge <agent>    the model that writes the final answer (default: automatic)
-  -m, --mode <mode>      code (models change files) or answer (models argue out an answer); default: guessed from the task
-  -f, --file <path>      read the task from a file
-      --apply            apply the winner automatically
-      --bg               run in the background
+  -a, --agents <list>    who argues: models (opus,gpt-6.1-sol@high), CLIs (claude,codex) or claude:sonnet
+  -c, --check <cmd>      command that proves a code change works (auto-detected; "none" to skip)
+  -r, --rounds <n>       most rounds of discussion after the opening (default 4; rooms usually settle sooner)
+  -b, --budget <usd>     spending cap (enforced for CLIs that report cost: Claude Code, OpenCode, Pi)
+  -m, --mode <mode>      code (agents change files) or answer (agents argue out an answer); default: guessed
+  -f, --file <path>      read the task from a file ("-" for stdin)
+      --apply            apply the change automatically when done
+      --bg               run in the background (then: argue watch / argue wait)
       --json             machine-readable output
-      --verbose          show every model call, check and objection while it runs
+      --verbose          also show costs, notes and every check
   -h, --help · -v, --version
 
 More: https://github.com/Jassi2004/argue#readme`;
@@ -60,6 +58,7 @@ const OPTIONS = {
   rounds: { type: "string", short: "r" },
   budget: { type: "string", short: "b" },
   timeout: { type: "string", short: "t" },
+  minutes: { type: "string" },
   file: { type: "string", short: "f" },
   context: { type: "string" },
   agent: { type: "string" },
@@ -78,23 +77,8 @@ const OPTIONS = {
   help: { type: "boolean", short: "h" },
 };
 
-const COMMANDS = new Set([
-  "ask",
-  "apply",
-  "show",
-  "runs",
-  "watch",
-  "wait",
-  "cancel",
-  "doctor",
-  "lineup",
-  "init",
-  "install",
-  "uninstall",
-  "mcp",
-  "help",
-  "version",
-]);
+const COMMANDS = new Set(["ask", "apply", "show", "runs", "watch", "wait", "cancel", "doctor", "lineup", "install", "uninstall", "mcp", "help", "version"]);
+const TARGETS = ["skill", "claude", "codex", "cursor", "gemini", "opencode", "pi"];
 
 export async function main(argv) {
   const { values: o, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS, strict: true });
@@ -104,27 +88,40 @@ export async function main(argv) {
   const cwd = process.cwd();
 
   if (cmd === "mcp") return startMcpServer();
-  // First time a person uses argue at a terminal: offer to connect it to their agents (asked once).
+  // The first time a person uses argue at a terminal: offer to connect it to their agents (asked once).
   if (!o.json && !o.bg && !o.quiet && !["install", "uninstall", "wait", "version"].includes(cmd)) await maybeOfferSetup();
   if (o.help || cmd === "help" || (!cmd && !rest.length && !o.file)) return console.log(HELP);
-  if (cmd === "version") return console.log(VERSION);
-  if (cmd === "doctor") return doctor(cwd, o);
-  if (cmd === "lineup") return lineupCmd(cwd, rest, o);
-  if (cmd === "init") return init(cwd);
-  if (cmd === "install" || cmd === "uninstall") return integrations(rest, cmd === "uninstall");
-  if (cmd === "runs") return runsCmd(cwd, o);
-  if (cmd === "show") return show(cwd, rest[0], o);
-  if (cmd === "watch") return watch(cwd, rest[0]);
-  if (cmd === "wait") return waitCmd(cwd, rest[0], o);
-  if (cmd === "cancel") return cancelCmd(cwd, rest[0]);
-  if (cmd === "apply") return applyCmd(cwd, rest[0], o);
-  if (cmd === "ask") return askCmd(cwd, rest, o);
+  switch (cmd) {
+    case "version":
+      return console.log(VERSION);
+    case "doctor":
+      return doctor(cwd, o);
+    case "lineup":
+      return lineupCmd(cwd, rest, o);
+    case "install":
+    case "uninstall":
+      return integrations(rest, cmd === "uninstall");
+    case "runs":
+      return runsCmd(cwd, o);
+    case "show":
+      return show(cwd, rest[0], o);
+    case "watch":
+      return watch(cwd, rest[0]);
+    case "wait":
+      return waitCmd(cwd, rest[0], o);
+    case "cancel":
+      return cancelCmd(cwd, rest[0]);
+    case "apply":
+      return applyCmd(cwd, rest[0], o);
+    case "ask":
+      return askCmd(cwd, rest, o);
+  }
   return runTask(cwd, rest, o);
 }
 
 /**
  * `argue apply` is a command, `argue "apply the fix in parser.ts"` is a task.
- * A subcommand is the first word only when it is passed as its own argument and takes at most its own arguments.
+ * A subcommand is the first word only when it is its own argument and takes at most its own arguments.
  */
 function detectCommand(positionals, o) {
   const [first, ...more] = positionals;
@@ -193,9 +190,8 @@ async function runTask(cwd, rest, o) {
       `"${task}" is not a command, and one word is too little to work on.\nDescribe the task, e.g. argue "fix the flaky test in auth.spec.ts". Run "argue --help" for commands.`,
     );
 
-  let mode = o.mode ?? (config.mode && config.mode !== "auto" ? config.mode : null) ?? guessMode(task);
-  if (mode === "ask") mode = "answer"; // older name
-  if (!["code", "answer"].includes(mode)) throw new Error(`--mode must be "code" (models change files) or "answer" (models argue out an answer)`);
+  const mode = o.mode ?? (config.mode && config.mode !== "auto" ? config.mode : null) ?? guessMode(task);
+  if (!["code", "answer"].includes(mode)) throw new Error(`--mode must be "code" (agents change files) or "answer" (agents argue out an answer)`);
   if (!(await hasGit())) throw new Error("git is required (https://git-scm.com/downloads)");
 
   const installedMap = await detect(drivers);
@@ -206,13 +202,15 @@ async function runTask(cwd, rest, o) {
       `no agent CLIs found. Install at least one of: Claude Code, Codex, Gemini CLI, Cursor CLI, OpenCode, Pi.\nRun "argue doctor" for install commands.`,
     );
   const agents = parseAgents(lineup, drivers);
-  if (agents.length < 2) throw new Error(`need at least two competitors. With one CLI you can repeat it: --agents ${agents[0].kind},${agents[0].kind}`);
-  if (agents.length > 8) throw new Error("at most 8 competitors");
+  if (agents.length < 2)
+    throw new Error(
+      `a room needs at least two agents. With one CLI, use two of its models (e.g. -a claude:opus,claude:sonnet) or the same one twice (-a ${agents[0].kind},${agents[0].kind})`,
+    );
+  if (agents.length > 8) throw new Error("at most 8 agents");
   const missing = [...new Set(agents.filter((a) => !installedMap[a.kind]).map((a) => a.kind))];
   if (missing.length) throw new Error(`not installed: ${missing.join(", ")}. Run "argue doctor".`);
-  const judgeSpec = o.judge ?? config.judge ?? defaultJudge(installed, agents);
-  const [judge] = parseAgents(judgeSpec, drivers);
-  if (!installedMap[judge.kind]) throw new Error(`judge "${judge.kind}" is not installed`);
+  const [judge] = parseAgents(o.judge ?? config.judge ?? defaultJudge(installed, agents), drivers);
+  if (!installedMap[judge.kind]) throw new Error(`"${judge.kind}" (for the final answer) is not installed`);
 
   let check = o.check ?? config.check;
   if (check === "none" || check === false || check === "") check = null;
@@ -222,6 +220,7 @@ async function runTask(cwd, rest, o) {
   const budgetRaw = o.budget ?? config.budget;
   const budget = budgetRaw == null || budgetRaw === "" ? undefined : num(budgetRaw, "budget", 0.01, 10000);
   const timeout = num(o.timeout ?? config.timeout, "timeout", 1, 600);
+  const minutes = num(o.minutes ?? config.minutes, "minutes", 1, 1440);
 
   if (o.bg) {
     // Rebuild the child's arguments from resolved settings; the task goes through a file so nothing in it is parsed as flags.
@@ -229,23 +228,22 @@ async function runTask(cwd, rest, o) {
     const taskFile = join(tmpdir(), `argue-task-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
     writeFileSync(taskFile, task);
     const args = ["-f", taskFile, "--mode", mode, "--agents", agents.map((a) => a.name).join(","), "--judge", judge.name];
-    args.push("--check", check ?? "none", "--rounds", String(rounds), "--timeout", String(timeout));
+    args.push("--check", check ?? "none", "--rounds", String(rounds), "--timeout", String(timeout), "--minutes", String(minutes));
     if (budget) args.push("--budget", String(budget));
     if (o.context) args.push(`--context=${o.context}`);
     if (o.apply) args.push("--apply");
     if (o.keep) args.push("--keep");
     const started = startDetached({ cwd, args });
     const { runId, log } = started;
-    const run = await waitForStart(cwd, started);
-    if (o.json) {
+    const r = await waitForStart(cwd, started);
+    if (o.json)
       return console.log(
         JSON.stringify(
-          { run_id: runId, status: "running", lineup: run.meta.agents, display: run.meta.display, note: run.meta.note, next: `argue wait ${runId}` },
+          { run_id: runId, status: "running", lineup: r.meta.agents, display: r.meta.display, note: r.meta.note, next: `argue wait ${runId}` },
           null,
           2,
         ),
       );
-    }
     console.log(
       `${green("started")} ${runId}\n  ${dim("follow:")}  argue watch ${runId}\n  ${dim("apply:")}   argue apply ${runId}\n  ${dim("log:")}     ${log}`,
     );
@@ -268,12 +266,11 @@ async function runTask(cwd, rest, o) {
   process.on("SIGINT", onSig);
   process.on("SIGTERM", onSig);
 
-  const quiet = o.quiet;
   const write = o.json ? (s) => process.stderr.write(`${s}\n`) : (s) => process.stdout.write(`${s}\n`);
-  const onEvent = quiet ? () => {} : progressPrinter(write, { verbose: o.verbose });
+  const onEvent = o.quiet ? () => {} : progressPrinter(write, { verbose: o.verbose });
 
   try {
-    const result = await argue({
+    const result = await runRoom({
       task,
       agents,
       judge,
@@ -285,15 +282,17 @@ async function runTask(cwd, rest, o) {
       rounds,
       budget,
       timeout,
+      minutes,
+      mcp: config.mcp,
       apply: o.apply,
       keep: o.keep,
-      ctx: o.context ?? "",
+      context: o.context ?? "",
       runId: o["run-id"],
       onEvent,
       signal: controller.signal,
     });
     if (o.json) console.log(JSON.stringify(result, null, 2));
-    else if (!quiet) printResult(result);
+    else if (!o.quiet) printResult(result);
   } catch (err) {
     if (o.json) console.log(JSON.stringify({ status: "failed", error: err.message, runDir: err.runDir }, null, 2));
     throw err;
@@ -314,7 +313,7 @@ async function projectRoot(cwd) {
   return r.code === 0 ? r.stdout.trim() : cwd;
 }
 
-// ---------------------------------------------------------------- doctor / init / install
+// ---------------------------------------------------------------- setup
 
 async function doctor(cwd, o = {}) {
   const root = await projectRoot(cwd);
@@ -326,6 +325,7 @@ async function doctor(cwd, o = {}) {
   const agents = lineup ? parseAgents(lineup, drivers) : [];
   const descs = agents.map((a) => describe(a, { drivers, cwd: root }));
   const check = config.check && config.check !== "auto" ? config.check : detectCheck(root);
+  const shared = sharedServers(config.mcp, found);
 
   if (o.json)
     return console.log(
@@ -343,6 +343,7 @@ async function doctor(cwd, o = {}) {
           lineupSource: config.agents ? "saved" : "automatic",
           note: descs.length ? lineupNote(descs) : null,
           check,
+          mcp: { configured: config.mcp, found: shared },
         },
         null,
         2,
@@ -351,7 +352,7 @@ async function doctor(cwd, o = {}) {
 
   console.log(`${bold("argue")} ${VERSION} · node ${process.versions.node} · ${process.platform}`);
   console.log(`  ${(await hasGit()) ? green("✓") : red("✗")} git`);
-  console.log(`\n${bold("Harnesses")}                  ${dim("default model · effort")}`);
+  console.log(`\n${bold("Agent CLIs")}                 ${dim("default model · effort")}`);
   for (const [kind, d] of Object.entries(drivers)) {
     if (!found[kind]) {
       console.log(`  ${dim("·")} ${dim(kind.padEnd(9))} ${dim(`${d.title} — install: ${d.install}`)}`);
@@ -372,7 +373,17 @@ async function doctor(cwd, o = {}) {
     console.log(dim(`  ${config.agents ? "your saved default" : "automatic (from installed CLIs)"} · change: argue lineup <a,b,…>`));
   }
   if (agents.length && new Set(agents.map((a) => a.kind)).size === 1)
-    console.log(dim("  tip: agents from different vendors catch more of each other's mistakes; install another CLI if you can."));
+    console.log(dim("  tip: models from different labs catch more of each other's mistakes; install another CLI if you can."));
+
+  console.log(
+    `\n${bold("Shared tools")}  ${config.mcp.length ? "" : dim('no MCP servers shared with agents (add "mcp": ["name", …] to your config to share some)')}`,
+  );
+  for (const [kind, names] of Object.entries(shared)) {
+    const missing = config.mcp.filter((n) => !names.includes(n));
+    console.log(
+      `  ${kind.padEnd(9)} ${names.length ? names.join(", ") : dim("none")}${missing.length ? dim(`  (not in its config: ${missing.join(", ")})`) : ""}`,
+    );
+  }
   console.log(`\n${bold("Check here")}  ${check ?? dim("none detected (pass --check)")}`);
   console.log(dim(`\nLogin issues? Run each CLI once on its own (e.g. "claude", "codex") to sign in.`));
 }
@@ -396,31 +407,6 @@ async function lineupCmd(cwd, rest, o) {
   );
 }
 
-async function init(cwd) {
-  const drivers = registry(loadConfig(await projectRoot(cwd)));
-  const installed = Object.keys(await detect(drivers));
-  const path = userConfigPath();
-  const current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-  const suggested = current.agents ?? defaultLineup(installed);
-  console.log(`installed: ${installed.join(", ") || "none"}`);
-  const { createInterface } = await import("node:readline/promises");
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const agents = (await rl.question(`competitors [${suggested}]: `)).trim() || suggested;
-    parseAgents(agents, drivers);
-    const judge = (await rl.question(`judge [auto]: `)).trim() || null;
-    const budget = (await rl.question(`budget per run in USD [none]: `)).trim() || null;
-    const rounds = (await rl.question(`max rounds [${current.rounds ?? 2}]: `)).trim() || current.rounds || 2;
-    writeConfig(path, { ...current, agents, judge, budget: budget ? Number(budget) : null, rounds: Number(rounds) });
-    console.log(`${green("saved")} ${path}`);
-  } finally {
-    rl.close();
-  }
-  console.log(dim(`next: "argue install" adds /argue to your coding agents`));
-}
-
-const TARGETS = ["skill", "claude", "codex", "cursor", "gemini", "opencode", "pi"];
-
 async function integrations(only, remove) {
   const bad = only.filter((t) => !TARGETS.includes(t));
   if (bad.length) throw new Error(`unknown target(s): ${bad.join(", ")} (choose from: ${TARGETS.join(" ")})`);
@@ -429,7 +415,7 @@ async function integrations(only, remove) {
   if (!only.length) markSetupDone();
   for (const r of results) {
     const mark = r.status === "error" ? red("✗") : r.status === "skipped" ? dim("·") : green("✓");
-    console.log(`  ${mark} ${r.title.padEnd(60)} ${r.status === "skipped" ? dim(r.detail) : r.status === "error" ? red(r.detail) : dim(r.detail)}`);
+    console.log(`  ${mark} ${r.title.padEnd(60)} ${r.status === "error" ? red(r.detail) : dim(r.detail)}`);
   }
   if (!remove) console.log(dim(`\nRestart your agents, then ask: "argue <task>" (or /argue in Gemini, OpenCode, Pi).`));
 }
@@ -441,7 +427,7 @@ async function runsCmd(cwd, o) {
   if (o.json)
     return console.log(
       JSON.stringify(
-        runs.map((r) => ({ id: r.id, status: r.status, task: r.meta.task, winner: r.result?.winner ?? null })),
+        runs.map((r) => ({ id: r.id, status: r.status, task: r.meta.task, outcome: r.result?.outcome ?? null })),
         null,
         2,
       ),
@@ -449,52 +435,52 @@ async function runsCmd(cwd, o) {
   if (!runs.length) return console.log("no runs yet");
   for (const r of runs.slice(0, 30)) {
     const st = r.status === "done" ? green("done") : r.status === "running" ? yellow("running") : red(r.status);
-    console.log(`${cyan(r.id)}  ${st.padEnd(16)} ${(r.result?.winner?.agent ?? "").padEnd(16)} ${dim(trim(r.meta.task, 70))}`);
+    console.log(`${cyan(r.id)}  ${st.padEnd(16)} ${dim(trim(r.meta.task, 80))}`);
   }
 }
 
 async function show(cwd, id, o) {
-  const run = await findRun(cwd, id);
-  if (o.json) return console.log(JSON.stringify(run.result ?? summarize(run), null, 2));
-  const report = join(run.path, "report.md");
-  if (existsSync(report)) return console.log(readFileSync(report, "utf8"));
-  console.log(JSON.stringify(summarize(run), null, 2));
+  const r = await findRun(cwd, id);
+  if (o.json) return console.log(JSON.stringify(r.result ?? summarize(r), null, 2));
+  const record = readText(r, "room.md");
+  if (record) return console.log(record);
+  console.log(JSON.stringify(summarize(r), null, 2));
 }
 
 async function watch(cwd, id) {
-  let run = await findRun(cwd, id);
+  let r = await findRun(cwd, id);
   const print = progressPrinter();
   let seen = 0;
   for (;;) {
-    const events = readEvents(run.path);
+    const events = readEvents(r.path);
     for (const e of events.slice(seen)) print(e);
     seen = events.length;
-    run = await findRun(cwd, run.id);
-    if (run.status !== "running") break;
-    await new Promise((r) => setTimeout(r, 1000));
+    r = await findRun(cwd, r.id);
+    if (r.status !== "running") break;
+    await new Promise((res) => setTimeout(res, 1000));
   }
-  if (run.status === "done") printResult(run.result);
-  else console.log(red(`run ${run.status}: ${run.result?.error ?? ""}`));
+  if (r.status === "done") printResult(r.result);
+  else console.log(red(`run ${r.status}${r.result?.error ? `: ${r.result.error}` : ""}`));
 }
 
 async function waitCmd(cwd, id, o) {
-  const run = await findRun(cwd, id);
+  const r = await findRun(cwd, id);
   const seconds = o.seconds ? num(o.seconds, "seconds", 1, 3600) : 240;
-  console.log(JSON.stringify(summarize(await waitForFinish(cwd, run.id, seconds)), null, 2));
+  console.log(JSON.stringify(summarize(await waitForFinish(cwd, r.id, seconds)), null, 2));
 }
 
 async function cancelCmd(cwd, id) {
-  const run = await findRun(cwd, id);
-  if (run.status === "interrupted") {
-    await reap(run);
-    return console.log(`cleaned up interrupted run ${run.id}`);
+  const r = await findRun(cwd, id);
+  if (r.status === "interrupted") {
+    await reap(r);
+    return console.log(`cleaned up interrupted run ${r.id}`);
   }
-  if (run.status !== "running") return console.log(`run ${run.id} is ${run.status}`);
-  await requestCancel(run);
-  console.log(`cancelled ${run.id}`);
+  if (r.status !== "running" && r.status !== "stuck") return console.log(`run ${r.id} is ${r.status}`);
+  await requestCancel(r);
+  console.log(`cancelled ${r.id}`);
 }
 
-/** argue ask "why not Postgres?" [--run <id>]: answer a follow-up from the latest (or given) run's log book. */
+/** argue ask "why not Postgres?" [--run <id>]: answer a follow-up from the latest (or given) run's record. */
 async function askCmd(cwd, rest, o) {
   const question = rest.join(" ").trim();
   if (!question) throw new Error('ask a question, e.g. argue ask "why not Postgres?"');
@@ -502,13 +488,12 @@ async function askCmd(cwd, rest, o) {
   const config = loadConfig(root);
   const drivers = registry(config);
   const installedMap = await detect(drivers);
-  const installed = Object.keys(installedMap);
-  const run = await findRun(cwd, o.run);
-  const lineup = parseAgents(run.meta.agents?.map((a) => a.agent) ?? (config.agents || defaultLineup(installed)), drivers);
-  const [agent] = parseAgents(o.judge ?? run.meta.judge ?? defaultJudge(installed, lineup), drivers);
+  const r = await findRun(cwd, o.run);
+  const lineup = parseAgents(r.meta.agents?.map((a) => a.agent) ?? (config.agents || defaultLineup(Object.keys(installedMap))), drivers);
+  const [agent] = parseAgents(o.judge ?? r.meta.judge ?? defaultJudge(Object.keys(installedMap), lineup), drivers);
   if (!installedMap[agent.kind]) throw new Error(`${agent.kind} is not installed`);
-  if (!o.json) process.stderr.write(dim("checking the record of that run…\n"));
-  const res = await askAbout({ cwd, id: run.id, question, agent, drivers, installed: installedMap });
+  if (!o.json) process.stderr.write(dim("reading the record of that run…\n"));
+  const res = await askAbout({ cwd, id: r.id, question, agent, drivers, installed: installedMap });
   if (o.json) return console.log(JSON.stringify(res, null, 2));
   console.log(`\n${res.answer}\n`);
 }

@@ -3,8 +3,7 @@ import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fromRoot } from "../util/paths.js";
-import { newRunId } from "./session.js";
-import { findRun } from "./runs.js";
+import { findRun, newRunId } from "./store.js";
 
 const BIN = fromRoot("bin", "argue.js");
 

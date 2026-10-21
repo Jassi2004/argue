@@ -8,12 +8,14 @@ import { delimiter, dirname, join } from "node:path";
  */
 export const DEFAULTS = {
   agents: null, // null = auto from installed CLIs
-  judge: null, // null = auto (prefers a CLI that is not competing)
-  check: "auto", // "auto" = detect from project, "" / false = none
-  rounds: 2,
+  judge: null, // who writes the final answer; null = auto (prefers a CLI that is not in the room)
+  check: "auto", // "auto" = detect from the project, "none" = no check
+  rounds: 4, // most discussion rounds after the opening (rooms usually settle sooner)
   budget: null, // USD; only enforced for CLIs that report cost
-  timeout: 20, // minutes per agent call
-  mode: "auto", // "auto" = guess from the task; "code" = models change files; "answer" = models argue out an answer
+  timeout: 20, // minutes per agent turn
+  minutes: 60, // a run starts no new round after this many minutes
+  mode: "auto", // "auto" = guess from the task; "code" = agents change files; "answer" = agents argue out an answer
+  mcp: [], // MCP servers agents may use, by name (from each CLI's own config); none by default
   custom: {}, // custom agents: { name: { command, readCommand?, title? } }
 };
 
@@ -49,6 +51,8 @@ export function loadConfig(projectDir) {
     if (unknown.length) throw new Error(`${path}: unknown setting(s) ${unknown.join(", ")} (valid: ${[...KNOWN].filter((k) => k !== "$schema").join(", ")})`);
     for (const [name, def] of Object.entries(cfg.custom ?? {}))
       if (!def || typeof def.command !== "string") throw new Error(`${path}: custom agent "${name}" needs a "command" string`);
+    if (cfg.mcp !== undefined && !(Array.isArray(cfg.mcp) && cfg.mcp.every((s) => typeof s === "string")))
+      throw new Error(`${path}: "mcp" must be a list of MCP server names, e.g. ["github", "postgres"]`);
   }
   return { ...DEFAULTS, ...user, ...project, custom: { ...(user.custom ?? {}), ...(project.custom ?? {}) } };
 }

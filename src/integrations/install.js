@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { onPath } from "../models/config.js";
+import { onPath } from "../config.js";
 import { writeAtomic } from "../util/fs.js";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

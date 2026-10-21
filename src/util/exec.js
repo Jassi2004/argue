@@ -166,10 +166,13 @@ export function oneLine(s = "", max = 100) {
 export function lastJsonObject(text = "") {
   const end = text.lastIndexOf("}");
   if (end < 0) return null;
-  for (let start = text.lastIndexOf("{", end); start >= 0; start = text.lastIndexOf("{", start - 1)) {
+  let start = text.lastIndexOf("{", end);
+  while (start >= 0) {
     try {
       return JSON.parse(text.slice(start, end + 1));
     } catch {}
+    // lastIndexOf(x, -1) searches from 0 again, so stop explicitly at the start of the text.
+    start = start > 0 ? text.lastIndexOf("{", start - 1) : -1;
   }
   return null;
 }

@@ -1,17 +1,20 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { jsonLines, lastJsonObject, oneLine, run, shell, tail, which } from "../util/exec.js";
 
 /**
  * A driver wraps one coding-agent CLI in headless mode.
  *
- *   ask({ model, effort, prompt, promptFile, cwd, write, timeoutMs, budgetUsd })
- *     -> { ok, text, costUsd, tokens, error }
+ *   ask({ model, effort, prompt, promptFile, cwd, write, timeoutMs, budgetUsd, protect, mcp })
+ *     -> { ok, text, costUsd, tokens, error }   (costUsd / tokens are null when the CLI doesn't report them)
  *
- * `write: true`  = the agent may edit files and run commands in `cwd` (its own worktree).
- * `write: false` = read-only (critique / judge / plan).
- * `promptFile` is a copy of `prompt` on disk inside `cwd`, for CLIs that are easier to drive with a short argument.
+ * `write: true`  = the agent may edit files and run commands in `cwd` (its own desk).
+ * `write: false` = read-only (the verdict, follow-up questions).
+ * `promptFile`   = a copy of `prompt` inside `cwd`, for CLIs that are easier to drive with a short argument.
+ * `mcp`          = names of MCP servers (from the CLI's own config) the agent may use. Default: none,
+ *                  because an unattended agent with your Slack or Jira servers could act on them.
+ *                  Honoured by Claude Code and Codex; other CLIs use whatever they are configured with.
  */
 const POINTER = (file, cwd) =>
   `Read the file ${relative(cwd, file).split("\\").join("/")} (in the current directory) and follow the instructions in it exactly. Reply only with what it asks for.`;
@@ -21,14 +24,16 @@ export const DRIVERS = {
     title: "Claude Code",
     bin: "claude",
     install: "npm i -g @anthropic-ai/claude-code",
-    async ask({ model, effort, prompt, cwd, write, timeoutMs, budgetUsd, protect = [] }) {
-      // --strict-mcp-config with no --mcp-config: no MCP servers (faster startup, and no nested argue).
-      const args = ["-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config"];
-      args.push(
-        ...(write
-          ? ["--permission-mode", "acceptEdits", "--allowedTools", "Read,Edit,Write,MultiEdit,Glob,Grep,Bash,TodoWrite"]
-          : ["--permission-mode", "dontAsk", "--allowedTools", "Read,Glob,Grep"]),
-      );
+    async ask({ model, effort, prompt, cwd, write, timeoutMs, budgetUsd, protect = [], mcp = [] }) {
+      const args = ["-p", "--output-format", "json", "--no-session-persistence"];
+      // Only the MCP servers the user shared (none by default: faster startup, no side effects, no nested argue).
+      const servers = claudeServers(mcp);
+      const tmp = Object.keys(servers).length ? mkdtempSync(join(tmpdir(), "argue-mcp-")) : null;
+      if (tmp) writeFileSync(join(tmp, "mcp.json"), JSON.stringify({ mcpServers: servers }));
+      args.push("--strict-mcp-config", ...(tmp ? ["--mcp-config", join(tmp, "mcp.json")] : []));
+      const shared = Object.keys(servers).map((s) => `mcp__${s}`);
+      const tools = write ? ["Read", "Edit", "Write", "MultiEdit", "Glob", "Grep", "Bash", "TodoWrite"] : ["Read", "Glob", "Grep"];
+      args.push("--permission-mode", write ? "acceptEdits" : "dontAsk", "--allowedTools", [...tools, "WebSearch", "WebFetch", ...shared].join(","));
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
       if (budgetUsd > 0) args.push("--max-budget-usd", budgetUsd.toFixed(2));
@@ -36,12 +41,13 @@ export const DRIVERS = {
       const deny = protect.flatMap((p) => [`Edit(/${p}/**)`, `Write(/${p}/**)`, `MultiEdit(/${p}/**)`, `NotebookEdit(/${p}/**)`]);
       if (deny.length) args.push("--settings", JSON.stringify({ permissions: { deny } }));
       const res = await run("claude", args, { cwd, input: prompt, timeoutMs });
+      if (tmp) rmSync(tmp, { recursive: true, force: true });
       const json = lastJsonObject(res.stdout);
       if (!json || json.type !== "result") return fail(res);
       return {
         ok: !json.is_error,
         text: json.result ?? "",
-        costUsd: json.total_cost_usd ?? 0,
+        costUsd: json.total_cost_usd ?? null,
         tokens: sumTokens(json.usage),
         error: json.is_error ? oneLine(json.result || json.subtype, 300) : undefined,
       };
@@ -52,10 +58,12 @@ export const DRIVERS = {
     title: "Codex CLI",
     bin: "codex",
     install: "npm i -g @openai/codex",
-    async ask({ model, effort, prompt, cwd, write, timeoutMs }) {
+    async ask({ model, effort, prompt, cwd, write, timeoutMs, mcp = [] }) {
       const dir = mkdtempSync(join(tmpdir(), "argue-codex-"));
       const out = join(dir, "last.txt");
       const args = ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", write ? "workspace-write" : "read-only", "-C", cwd, "-o", out];
+      // Codex loads every MCP server in its config; switch off all but the shared ones.
+      for (const name of codexServers()) if (name === "argue" || !mcp.includes(name)) args.push("-c", `mcp_servers.${tomlKey(name)}.enabled=false`);
       if (model) args.push("-m", model);
       if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
       args.push("-");
@@ -72,7 +80,7 @@ export const DRIVERS = {
       } catch {}
       rmSync(dir, { recursive: true, force: true });
       if (res.code !== 0 || !text) return fail(res, error);
-      return { ok: true, text, costUsd: 0, tokens };
+      return { ok: true, text, costUsd: null, tokens };
     },
   },
 
@@ -88,7 +96,7 @@ export const DRIVERS = {
       if (!json || json.error || typeof json.response !== "string") return fail(res, json?.error?.message);
       let tokens = 0;
       for (const m of Object.values(json.stats?.models ?? {})) tokens += m?.tokens?.total ?? 0;
-      return { ok: true, text: json.response, costUsd: 0, tokens };
+      return { ok: true, text: json.response, costUsd: null, tokens };
     },
   },
 
@@ -105,7 +113,7 @@ export const DRIVERS = {
       const res = await run(bin, args, { cwd, timeoutMs });
       const json = lastJsonObject(res.stdout);
       if (!json || json.is_error || typeof json.result !== "string") return fail(res);
-      return { ok: true, text: json.result, costUsd: 0, tokens: 0 };
+      return { ok: true, text: json.result, costUsd: null, tokens: null };
     },
   },
 
@@ -180,7 +188,7 @@ export function customDriver(name, def) {
     custom: true,
     async ask({ model, promptFile, cwd, write, timeoutMs }) {
       const template = (!write && def.readCommand) || def.command;
-      if (!template) return { ok: false, text: "", costUsd: 0, tokens: 0, error: `custom agent "${name}" has no command` };
+      if (!template) return { ok: false, text: "", costUsd: null, tokens: null, error: `custom agent "${name}" has no command` };
       const line = template
         .replaceAll("{prompt_file}", quote(promptFile))
         .replaceAll("{cwd}", quote(cwd))
@@ -188,9 +196,44 @@ export function customDriver(name, def) {
       const [cmd, args] = shell(line);
       const res = await run(cmd, args, { cwd, timeoutMs, env: { ARGUE_WRITE: write ? "1" : "0", ARGUE_PROMPT_FILE: promptFile } });
       if (res.code !== 0) return fail(res);
-      return { ok: true, text: res.stdout.trim(), costUsd: 0, tokens: 0 };
+      return { ok: true, text: res.stdout.trim(), costUsd: null, tokens: null };
     },
   };
+}
+
+// ---------------------------------------------------------------- shared MCP servers
+
+/** The user's Claude Code MCP servers (user scope, ~/.claude.json) that are shared with agents. */
+export function claudeServers(names = [], home = homedir()) {
+  if (!names.length) return {};
+  let all = {};
+  try {
+    all = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers ?? {};
+  } catch {}
+  return Object.fromEntries(names.filter((n) => all[n] && n !== "argue").map((n) => [n, all[n]]));
+}
+
+/**
+ * The MCP servers defined in Codex's config.toml. Only these can be switched off with
+ * `-c mcp_servers.<name>.enabled=false`: doing that for a server a Codex plugin provides makes
+ * Codex refuse to start ("invalid transport"), so plugin servers are left as they are.
+ */
+export function codexServers(home = homedir(), env = process.env) {
+  let toml = "";
+  try {
+    toml = readFileSync(join(env.CODEX_HOME || join(home, ".codex"), "config.toml"), "utf8");
+  } catch {}
+  return [...toml.matchAll(/^\s*\[\s*mcp_servers\s*\.\s*(?:"([^"]+)"|([A-Za-z0-9_-]+))\s*\]\s*(?:#.*)?$/gm)].map((m) => m[1] ?? m[2]);
+}
+
+const tomlKey = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
+
+/** Which shared MCP servers each CLI actually has (for `argue doctor`). */
+export function sharedServers(mcp = [], installed = {}) {
+  const out = {};
+  if (installed.claude) out.claude = Object.keys(claudeServers(mcp));
+  if (installed.codex) out.codex = mcp.filter((n) => n !== "argue" && codexServers().includes(n));
+  return out;
 }
 
 function quote(s) {
@@ -215,7 +258,7 @@ function fail(res, hint) {
           .slice(-4)
           .join(" | ") || `exit code ${res.code}`;
   }
-  return { ok: false, text: "", costUsd: 0, tokens: 0, error: oneLine(error, 400) };
+  return { ok: false, text: "", costUsd: null, tokens: null, error: oneLine(error, 400) };
 }
 
 /** Registry of drivers available to this run (built-ins + custom from config). */
@@ -313,6 +356,6 @@ export async function ask(drivers, installed, agent, { prompt, cwd, tag, ...opts
   try {
     return await driver.ask({ bin: installed[agent.kind], model: agent.model, effort: agent.effort, prompt, promptFile, cwd, ...opts });
   } catch (err) {
-    return { ok: false, text: "", costUsd: 0, tokens: 0, error: err.message };
+    return { ok: false, text: "", costUsd: null, tokens: null, error: err.message };
   }
 }

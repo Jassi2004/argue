@@ -1,0 +1,21 @@
+A room of AI agents has finished working on the user's task: they worked alone first, then challenged each other's work with evidence and revised it. Write the one final answer the user will read.
+
+THE TASK
+Which database is best for a social media app?
+
+HOW THE ROOM ENDED
+Everyone agreed on B's work after 2 rounds.
+
+THE WORK, STRONGEST FIRST
+- B: .argue/room/work/B.md · v2
+
+The full record is in .argue/room/room.md and every agent's work is in .argue/room/work/. Read what you need and verify disputed claims yourself.
+
+HOW TO WRITE IT
+- Start from the work the room backed (or, without agreement, the strongest). Keep what survived the challenges, fix what was shown wrong, and bring in correct points from the other work.
+- Write for the user: the answer first, clear and concrete. Then, briefly, the main alternatives that were considered and why they lost.
+- Never mention agents, letters (A, B, …), rounds, challenges, the room or this process. Describe alternatives by what they are ("using MongoDB"), not by who proposed them.
+- Only if a disagreement that matters is still open, end with one line starting "Note:" that says what it is and which way you went.
+
+Reply with exactly one line of JSON first, then the answer:
+{"pick": "<letter of the work your answer is based on>", "unresolved": "<the open disagreement in a few words, or none>"}

@@ -2,9 +2,31 @@
 
 [![npm](https://img.shields.io/npm/v/argue-ai)](https://www.npmjs.com/package/argue-ai)
 
-**Ask several AI models the same thing. They argue it out. You get one carefully checked answer.**
+**Put several AI models in a room. They argue it out. You get the one answer that survived.**
 
 Use it for questions, decisions, plans, writing, or code changes.
+
+A real run (`argue "fix the LRU cache in lru.js so the tests pass"`):
+
+```
+⚔  argue · 2 agents · code change, checked by npm test --silent
+   A  sonnet · Claude Code · effort default
+   B  gpt-6.1-sol · Codex · effort high
+── opening · each agent works alone
+   B  ✓ 35s  check ✓ · backs own work · "Refresh Map insertion order on successful reads and writes…"
+   A  ✓ 54s  check ✓ · backs own work · "Fixed LRU by moving accessed/updated keys to end via delete+set…"
+── round 1 · A B
+   B  ✓ 31s  challenges A #1 "Stored undefined values fail to refresh recency." · backs own work
+   A  ✓ 1m03s  revised (v2) · check ✓ · backs own work
+── round 2 · A B
+   B  ✓ 20s  withdraws #1 · backs own work
+   A  ✓ 29s  answers #1 · backs B
+── red team · A tries to break B's work
+   A  ✓ 2m25s  backs B
+✓  Everyone agreed on B's work after 3 rounds (a red-team turn found nothing).
+```
+
+Both fixes passed the tests, but one agent spotted a bug the tests missed. The other fixed its own version, switched to backing the better one, then spent its red-team turn stress-testing it against a reference implementation before the room agreed.
 
 ## 1. Install
 
@@ -14,7 +36,7 @@ npm i -g argue-ai
 
 You also need:
 - **Node 20 or newer** and **git**
-- **At least one AI coding tool, logged in.** Two different ones work best.
+- **At least one AI coding tool, logged in.** Two from different labs work best.
 
 | Tool | Install it with |
 |---|---|
@@ -31,7 +53,7 @@ You also need:
 argue doctor
 ```
 
-This shows which AI tools argue found, which model each one uses, and which models will argue by default. The first time, it also offers to connect argue to your AI tools. Press **Enter** to say yes.
+This shows which AI tools argue found, which model each one uses, and who will argue by default. The first time, it also offers to connect argue to your AI tools. Press **Enter** to say yes.
 
 ## 3. Ask something
 
@@ -42,7 +64,7 @@ argue "which database should our social media app use?"
 argue "fix the failing login test"
 ```
 
-argue first shows which models will argue, then gives you one answer. That's it.
+You watch the room live, then get one answer. Your files never change until you run `argue apply`.
 
 **Or, from your AI tool:** in Claude Code, Codex, Cursor, Pi, OpenCode or Gemini, just say:
 
@@ -53,14 +75,22 @@ argue first shows which models will argue, then gives you one answer. That's it.
 | You want to… | Run |
 |---|---|
 | Ask a follow-up ("why not MongoDB?") | `argue ask "why not MongoDB?"` |
-| Apply a code change it suggested | `argue apply` |
-| See everything the models said | `argue show` |
+| Apply the code change | `argue apply` |
+| Read the whole debate: every post, challenge and revision | `argue show` |
 
-Your files never change until you run `argue apply`.
+## How the room works
+
+1. **Every agent works alone first**, in its own private copy of your project, so nobody copies the first idea. Each one also says what tools it has (web search, a database, a CLI), so the others can ask it for help.
+2. **Then they meet.** Each round, every agent reads the room and decides what to do: challenge someone's work with evidence, answer a challenge, fix its own work, borrow a better idea, ask another agent to check something, or back someone else's work.
+3. **Agreement has to be earned.** The room only ends in agreement when everyone backs the same work, someone else has really challenged it, and (for code) its check passes. If everyone agrees at once, one agent is sent to try to break it first.
+4. **It always ends.** When nobody has anything new to say, the room stops. Limits on rounds, time and money are a safety net.
+5. **You get one answer**, written from the work that held up. If a real disagreement is still open, it ends with a short **Note:**.
+
+The agents are letters to each other (A, B, C), so arguments win on evidence, not on which model made them. More in [how it works](docs/ARCHITECTURE.md).
 
 ## Choosing models
 
-argue uses your default models. To pick others for one run, add `-a`:
+argue picks a lineup from the tools you have installed. To choose for one run, add `-a`:
 
 ```bash
 argue "your question" -a opus,gpt-6.1-sol
@@ -68,30 +98,71 @@ argue "your question" -a opus,gpt-6.1-sol
 
 - **A model name** (`opus`, `gpt-6.1-sol`, `gemini-2.5-pro`): argue finds the right tool for it.
 - **A tool name** (`claude`, `codex`): that tool's usual model.
-- **Thinking effort:** add `@high` or `@low` (e.g. `gpt-6.1-sol@high`). This works with Claude Code, Codex and Pi.
+- **Thinking effort:** add `@high` or `@low` (e.g. `gpt-6.1-sol@high`). Works with Claude Code, Codex and Pi.
+- **Only one tool?** Use two of its models (`claude:opus,claude:sonnet`) or the same one twice. It works, but models from different labs catch more of each other's mistakes.
 
-To change your default models:
+To change your default lineup:
 
 ```bash
 argue lineup opus,gpt-6.1-sol@high   # checks the models exist, then saves them
-argue lineup --reset                 # go back to automatic
+argue lineup --reset                 # back to automatic
 ```
+
+## Sharing tools between agents
+
+By default agents get **no MCP servers**: an unattended agent with your Slack or Jira server could act on it. To let agents use specific servers from their own tool's config, list them in your settings (see below):
+
+```json
+{ "mcp": ["github", "postgres"] }
+```
+
+Claude Code and Codex agents then get exactly those. An agent that has a server can run it for the others when asked. `argue doctor` shows which shared servers each tool actually has.
 
 ## All commands
 
 | Command | What it does |
 |---|---|
-| `argue "<question or task>"` | Get one checked answer, or a code change |
-| `argue ask "<follow-up>"` | Ask about the last answer |
+| `argue "<question or task>"` | Run a room: get one checked answer, or a code change |
+| `argue ask "<follow-up>"` | Ask about the last answer, from the run's record |
 | `argue apply` | Apply the last code change to your files |
-| `argue show` | Show the full record of the last run |
+| `argue show` | The whole debate of the last run |
 | `argue runs` | List past runs |
+| `argue watch` | Follow a running room live |
 | `argue cancel` | Stop a run |
 | `argue doctor` | Check your setup |
 | `argue lineup [models]` | Show or change your default models |
-| `argue install` | Connect argue to your AI tools |
-| `argue uninstall` | Remove argue from your AI tools |
+| `argue install` / `uninstall` | Connect argue to your AI tools, or remove it |
 | `argue --help` | All options |
+
+## Settings
+
+Put settings in `.argue.json` in your project, or in `~/.config/argue/config.json` for all projects. Flags win over both.
+
+```json
+{ "agents": "opus,codex", "check": "npm test", "rounds": 4, "budget": 10, "mcp": ["github"] }
+```
+
+| Setting | Flag | Default |
+|---|---|---|
+| `agents` | `-a` | picked from your installed tools |
+| `check`: the command that proves a code change works | `-c` | detected (`npm test`, `pytest`, `go test`, …); `"none"` to skip |
+| `rounds`: most rounds after the opening | `-r` | 4 (rooms usually settle sooner) |
+| `budget`: USD cap, for tools that report cost | `-b` | none |
+| `minutes`: no new round starts after this | `--minutes` | 60 |
+| `timeout`: minutes per agent turn | `-t` | 20 |
+| `mode`: `code` or `answer` | `-m` | guessed from what you ask |
+| `mcp`: MCP servers agents may use | | none |
+| `custom`: your own CLI agents (below) | | |
+
+Other flags: `--bg` (run in the background), `--apply` (apply when done), `--verbose` (show costs and checks), `--json`.
+
+**Any command-line AI tool can join:**
+
+```json
+{ "custom": { "aider": { "command": "aider --yes-always --message-file {prompt_file}" } } }
+```
+
+**Where files go.** Each run's full record is in `<project>/.argue/runs/<id>/`, which git ignores automatically. Settings live in `~/.config/argue/`.
 
 ## Remove argue
 
@@ -100,46 +171,9 @@ argue uninstall
 npm uninstall -g argue-ai
 ```
 
-## How it works
-
-1. Each model works on your question alone, in its own private copy of your project.
-2. They review each other's work and point out mistakes, with evidence.
-3. Each model fixes what was wrong.
-4. The best of what survives becomes your answer.
-
-If the models still disagree about something important, the answer ends with a short **Note:**.
-
 ## Contributing
 
-Everything the models are told is plain text in [`instructions/`](instructions/README.md), one file per step. You can change how they argue without touching code. See [how it works](docs/HOW-IT-WORKS.md) and [contributing](docs/CONTRIBUTING.md).
-
-<details>
-<summary>Advanced options</summary>
-
-**Per-project settings.** Create `.argue.json` in your project:
-
-```json
-{ "agents": "opus,codex", "check": "npm test", "rounds": 2, "budget": 10 }
-```
-
-**Options for a single run:**
-- `-c "npm test"`: the command that proves a code change works (auto-detected)
-- `-r 2`: rounds of review
-- `-b 5`: budget in USD (for tools that report cost)
-- `--bg`: run in the background
-- `--verbose`: show every step
-
-**Custom tools.** Any command-line AI tool can take part:
-
-```json
-{ "custom": { "aider": { "command": "aider --yes-always --message-file {prompt_file}" } } }
-```
-
-**MCP server.** `argue mcp`; `argue install` sets it up for you.
-
-**Where files go.** Run records go in `<project>/.argue/`, which git ignores automatically. Settings live in `~/.config/argue/`.
-
-</details>
+Everything the agents are told is plain Markdown in [`instructions/`](instructions/README.md), so you can change how they argue without touching code. See [how it works](docs/ARCHITECTURE.md) and [contributing](docs/CONTRIBUTING.md).
 
 ## License
 

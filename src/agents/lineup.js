@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DRIVERS, ask, defaultLineup, detect, parseAgents, registry } from "../harnesses/index.js";
-import { loadConfig, userConfigPath, writeConfig } from "./config.js";
+import { DRIVERS, ask, defaultLineup, detect, parseAgents, registry } from "./drivers.js";
+import { loadConfig, userConfigPath, writeConfig } from "../config.js";
 import { run } from "../util/exec.js";
 
 /**

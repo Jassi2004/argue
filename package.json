@@ -1,7 +1,7 @@
 {
   "name": "argue-ai",
   "version": "0.2.3",
-  "description": "Several AI models (Claude, GPT, Gemini, …) argue it out; you get one carefully vetted answer. Works from Claude Code, Codex, Cursor, Pi, OpenCode or the terminal.",
+  "description": "Put several AI models (Claude, GPT, Gemini, …) in a room: they challenge each other with evidence until they agree, and you get one vetted answer. Works from Claude Code, Codex, Cursor, Pi, OpenCode or the terminal.",
   "type": "module",
   "bin": {
     "argue": "bin/argue.js"
