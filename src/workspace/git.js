@@ -253,6 +253,9 @@ export async function resetWorktree(ws, path, start) {
 
 export function removeWorktree(ws, path) {
   return serial(async () => {
+    // A `git worktree add` killed midway (e.g. by a cancel) leaves its entry locked ("initializing"),
+    // and prune never removes locked entries.
+    await run("git", ["worktree", "unlock", path], { cwd: ws.root });
     await run("git", ["worktree", "remove", "--force", "--force", path], { cwd: ws.root });
     // If git could not remove it, delete the folder ourselves, then prune. On Windows a just-killed
     // process (or a virus scanner) can hold files for a moment, and a delete may only be "pending"

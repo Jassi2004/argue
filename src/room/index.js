@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ask } from "../agents/drivers.js";
@@ -31,7 +31,9 @@ export async function runRoom(opts) {
   const started = Date.now();
   const timeoutMs = timeout * 60_000;
 
-  const scratch = join(tmpdir(), "argue", `${basename(cwd).replace(/[^\w.-]/g, "_")}-${runId}`);
+  // The real, long-form temp path: Windows temp folders often use short 8.3 names (RUNNER~1), and git
+  // must see the same spelling of a worktree's path every time to match it.
+  const scratch = join(realpathSync.native(tmpdir()), "argue", `${basename(cwd).replace(/[^\w.-]/g, "_")}-${runId}`);
   mkdirSync(scratch, { recursive: true });
   let ws;
   try {

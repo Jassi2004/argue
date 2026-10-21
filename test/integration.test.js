@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -56,6 +56,19 @@ const commitAll = (dir, msg) => {
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg], { cwd: dir });
 };
 const worktrees = (dir) => execFileSync("git", ["worktree", "list"], { cwd: dir, encoding: "utf8" }).trim().split("\n").length;
+/** No worktrees left but the repo itself; on failure, show git's view (for debugging CI on other OSes). */
+function assertNoDesks(dir) {
+  const n = worktrees(dir);
+  if (n === 1) return;
+  const list = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: dir, encoding: "utf8" });
+  const admin = join(dir, ".git", "worktrees");
+  const locks = existsSync(admin)
+    ? readdirSync(admin).map(
+        (w) => `${w}: ${existsSync(join(admin, w, "locked")) ? `locked (${readFileSync(join(admin, w, "locked"), "utf8").trim()})` : "unlocked"}`,
+      )
+    : [];
+  assert.fail(`${n - 1} desk(s) left behind:\n${list}\n${locks.join("\n")}`);
+}
 
 /** Run a room on a repo with fake agents. */
 const play = (dir, list, opts = {}) =>
@@ -86,7 +99,7 @@ test("code mode: the room converges on the passing work; the user's files are un
   assert.ok(r.challenges >= 1);
   assert.match(readFileSync(join(dir, "math.js"), "utf8"), /=> 0/, "user file untouched");
   assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8" }).trim(), "?? notes.txt");
-  assert.equal(worktrees(dir), 1, "desks cleaned up");
+  assertNoDesks(dir);
   assert.ok(
     events.some((e) => e.type === "post" && e.challenges.length),
     "challenges are reported live",
@@ -215,7 +228,7 @@ test("the record is saved after every round, so a cancelled run keeps what happe
   const record = readFileSync(join(err.runDir, "room.md"), "utf8");
   assert.match(record, /## Opening[\s\S]*I worked on it \(good\)/);
   assert.equal(JSON.parse(readFileSync(join(err.runDir, "result.json"), "utf8")).status, "failed");
-  assert.equal(worktrees(dir), 1);
+  assertNoDesks(dir);
 });
 
 test("cancelling stops a run quickly, even before agents start", async () => {
@@ -228,7 +241,7 @@ test("cancelling stops a run quickly, even before agents start", async () => {
   const early = new AbortController();
   early.abort();
   await assert.rejects(play(dir, "slow,slow", { signal: early.signal }), /cancelled/);
-  assert.equal(worktrees(dir), 1);
+  assertNoDesks(dir);
 });
 
 test("agents get ARGUE_DEPTH so they cannot start nested runs", async () => {
@@ -269,7 +282,7 @@ test("two runs at once in the same repo do not interfere", async () => {
   assert.equal(a.winner.agent, "good");
   assert.equal(b.winner.agent, "good");
   assert.notEqual(a.runId, b.runId);
-  assert.equal(worktrees(dir), 1);
+  assertNoDesks(dir);
 });
 
 test("never copies a home folder or a huge non-git folder; answers still work there", async () => {
@@ -423,7 +436,7 @@ test("a run killed with SIGKILL is cleaned up by the next run", { skip: process.
     }
   });
   assert.deepEqual(alive, [], "orphaned agents were killed");
-  assert.equal(worktrees(dir), 1);
+  assertNoDesks(dir);
   assert.equal(JSON.parse(readFileSync(join(runDir, "result.json"), "utf8")).status, "interrupted");
 });
 
@@ -663,6 +676,20 @@ process.exit(1);
   assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).budget, 3, "a preview saves nothing");
   assert.equal(run("lineup", "--reset").status, 0);
   assert.equal(JSON.parse(readFileSync(join(home, ".config", "argue", "config.json"), "utf8")).agents, undefined);
+});
+
+test("a worktree whose creation was killed midway (left locked) is still removed", async () => {
+  const { openWorkspace, addWorktree, removeWorktree } = await import("../src/workspace/git.js");
+  const dir = makeRepo();
+  const scratch = mkdtempSync(join(tmpdir(), "argue-wt-"));
+  const ws = await openWorkspace(dir, scratch);
+  const path = join(scratch, "A");
+  await addWorktree(ws, path);
+  const name = readFileSync(join(path, ".git"), "utf8").trim().split(/[\\/]/).pop();
+  writeFileSync(join(dir, ".git", "worktrees", name, "locked"), "initializing"); // what a killed `git worktree add` leaves
+  rmSync(path, { recursive: true, force: true });
+  await removeWorktree(ws, path);
+  assertNoDesks(dir);
 });
 
 test("removeTree deletes folders with read-only files (like Go's module cache)", { skip: process.platform === "win32" }, async () => {
