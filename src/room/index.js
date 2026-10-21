@@ -259,7 +259,7 @@ export async function runRoom(opts) {
   return withScope({ signal: local.signal, env: { ARGUE_DEPTH: String(depth) }, onSpawn }, async () => {
     try {
       // ---------- desks ----------
-      for (const p of players) desks[p.id] = await D.openDesk(ws, join(scratch, p.id));
+      for (const p of players) await D.openDesk(ws, (desks[p.id] = D.newDesk(join(scratch, p.id))));
 
       // ---------- opening ----------
       emit({ type: "phase", name: "opening", round: 0, players: letters });
@@ -312,7 +312,7 @@ export async function runRoom(opts) {
       let unresolved = null;
       if (!overBudget()) {
         emit({ type: "phase", name: "verdict", round: room.round });
-        bench = await D.openDesk(ws, join(scratch, "verdict"));
+        await D.openDesk(ws, (bench = D.newDesk(join(scratch, "verdict"))));
         D.syncRoom(bench, mirror());
         const prompt = P.verdict({ task, check, mode, outcome, standings: standingsText(room, pool) });
         const t0 = Date.now();
