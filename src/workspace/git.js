@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isWin, run } from "../util/exec.js";
 
 // Identity + safety flags for argue's own internal commits (never in the user's repo history).
@@ -251,8 +251,37 @@ export async function resetWorktree(ws, path, start) {
   await git(path, "clean", "-fdq", "-e", "/.argue", ...ws.shared.flatMap((d) => ["-e", `/${d}`]));
 }
 
+// Git may refuse every worktree command when cancellation leaves a registration without commondir.
+// Remember only the registration pointing to this desk, so fallback cleanup cannot prune other desks.
+async function worktreeRegistration(ws, path) {
+  const res = await run("git", ["rev-parse", "--git-path", "worktrees"], { cwd: ws.root });
+  if (res.code !== 0) return null;
+  const root = resolve(ws.root, res.stdout.trim());
+  const canonical = (p) => {
+    let value;
+    try {
+      value = join(realpathSync(dirname(p)), basename(p));
+    } catch {
+      value = resolve(p);
+    }
+    return isWin ? value.toLowerCase() : value;
+  };
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const admin = join(root, entry.name);
+      try {
+        const gitfile = readFileSync(join(admin, "gitdir"), "utf8").trim();
+        if (gitfile && canonical(dirname(gitfile)) === canonical(path)) return admin;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 export function removeWorktree(ws, path) {
   return serial(async () => {
+    const registration = await worktreeRegistration(ws, path);
     // A `git worktree add` killed midway (e.g. by a cancel) leaves its entry locked ("initializing"),
     // and prune never removes locked entries.
     await run("git", ["worktree", "unlock", path], { cwd: ws.root });
@@ -265,6 +294,15 @@ export function removeWorktree(ws, path) {
         rmSync(path, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
       } catch {}
       if (existsSync(path)) await new Promise((r) => setTimeout(r, Math.min(200 * (i + 1), 1000)));
+    }
+    if (!existsSync(path) && registration) {
+      // A half-created registration cannot always be removed by Git, even after unlock.
+      for (let i = 0; i < 20 && existsSync(registration); i++) {
+        try {
+          rmSync(registration, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+        } catch {}
+        if (existsSync(registration)) await new Promise((r) => setTimeout(r, Math.min(200 * (i + 1), 1000)));
+      }
     }
     await run("git", ["worktree", "prune"], { cwd: ws.root });
   });
