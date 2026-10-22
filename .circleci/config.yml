@@ -1,0 +1,72 @@
+version: 2.1
+
+jobs:
+  audit-npm-package-content:
+    docker:
+      - image: cimg/node:24
+    steps:
+      - checkout
+      - run:
+          name: Build the npm release archive
+          command: |
+            set -euo pipefail
+            artifact_dir="$(mktemp -d)"
+            package_tarball="$(npm pack --silent --pack-destination "$artifact_dir")"
+            package_path="$artifact_dir/$package_tarball"
+            test -f "$package_path"
+            package_contents="$(tar -tzf "$package_path")"
+
+            for required in \
+              package/package.json \
+              package/README.md \
+              package/LICENSE \
+              package/bin/argue.js \
+              package/instructions/turn.md \
+              package/skills/argue/SKILL.md; do
+              if ! grep -Fxq "$required" <<< "$package_contents"; then
+                echo "The npm archive is missing required file: $required" >&2
+                exit 1
+              fi
+            done
+
+            while IFS= read -r entry; do
+              case "$entry" in
+                package/README.md|package/LICENSE|package/package.json|package/bin/*|package/src/*|package/skills/*|package/instructions/*) ;;
+                *)
+                  echo "Unexpected file in the public npm archive: $entry" >&2
+                  exit 1
+                  ;;
+              esac
+            done <<< "$package_contents"
+
+            tar -xOzf "$package_path" package/package.json > "$artifact_dir/package.json"
+            source_version="$(node -p "require('./package.json').version")"
+            node - "$artifact_dir/package.json" "$source_version" <<'NODE'
+            const fs = require('node:fs');
+            const [manifestPath, sourceVersion] = process.argv.slice(2);
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const errors = [];
+
+            if (manifest.name !== 'argue-ai') errors.push(`unexpected package name: ${manifest.name}`);
+            if (manifest.version !== sourceVersion) errors.push(`archive version ${manifest.version} differs from source version ${sourceVersion}`);
+            if (manifest.bin?.argue !== 'bin/argue.js') errors.push('argue CLI entry point is missing or incorrect');
+            if (manifest.engines?.node !== '>=20') errors.push('Node.js engine requirement must remain >=20');
+            if (manifest.private) errors.push('package is marked private and cannot be published');
+            if (Object.keys(manifest.dependencies ?? {}).length > 0) errors.push('runtime dependencies were added; review the zero-runtime-dependency policy');
+
+            if (errors.length) {
+              console.error(errors.map((error) => `- ${error}`).join('\n'));
+              process.exit(1);
+            }
+            console.log(`Audited argue-ai@${manifest.version}: manifest and packaged files are release-ready.`);
+            NODE
+
+workflows:
+  npm-package-content-audit:
+    jobs:
+      - audit-npm-package-content:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              ignore: /.*/
