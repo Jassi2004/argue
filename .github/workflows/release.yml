@@ -35,8 +35,17 @@ jobs:
       - if: steps.version.outputs.publish == 'true'
         run: git config --global user.name ci && git config --global user.email ci@example.com && npm test
       - if: steps.version.outputs.publish == 'true'
+        id: npm-publish
         run: npm publish --provenance --access public
-      - if: steps.version.outputs.publish == 'true'
+      - name: Verify the published package independently on GitLab
+        if: steps.version.outputs.publish == 'true'
+        env:
+          ARGUE_VERSION: ${{ steps.version.outputs.version }}
+          ARGUE_SOURCE_SHA: ${{ github.sha }}
+          GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
+          GITLAB_VERIFICATION_PROJECT_ID: ${{ vars.GITLAB_VERIFICATION_PROJECT_ID }}
+        run: node scripts/trigger-release-verification.mjs
+      - if: ${{ !cancelled() && steps.npm-publish.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "v${{ steps.version.outputs.version }}" --target "$GITHUB_SHA" --title "v${{ steps.version.outputs.version }}" --generate-notes
