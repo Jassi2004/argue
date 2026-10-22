@@ -25,6 +25,8 @@ GitHub Actions repository settings contain:
 - Secret `GITLAB_TRIGGER_TOKEN`: pipeline trigger token scoped to the verification project. Never use a personal access token here.
 - Variable `GITLAB_VERIFICATION_PROJECT_ID`: `87943783`.
 
+The GitLab project restricts pipeline variable overrides to Maintainers; the trigger belongs to the project owner so it can pass the version and source SHA.
+
 To rotate access, create a replacement token in the GitLab project's **Settings → CI/CD → Pipeline trigger tokens**, replace the GitHub secret, test a manual run, and revoke the old token. The trigger token is sent only to GitLab's fixed API endpoint and is never printed by the trigger script.
 
 This integration is independent of MAYA and has no scheduled runs.
