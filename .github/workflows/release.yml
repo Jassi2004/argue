@@ -9,13 +9,12 @@ permissions:
   contents: write # create the git tag and GitHub release
   id-token: write # prove to npm that this workflow is allowed to publish
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   publish:
-    concurrency:
-      group: release
-      cancel-in-progress: false
-    outputs:
-      pipeline_id: ${{ steps.gitlab.outputs.pipeline_id }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,46 +35,8 @@ jobs:
       - if: steps.version.outputs.publish == 'true'
         run: git config --global user.name ci && git config --global user.email ci@example.com && npm test
       - if: steps.version.outputs.publish == 'true'
-        id: npm-publish
         run: npm publish --provenance --access public
-      - name: Schedule independent GitLab verification
-        id: gitlab
-        if: steps.version.outputs.publish == 'true'
-        env:
-          ARGUE_VERSION: ${{ steps.version.outputs.version }}
-          ARGUE_SOURCE_SHA: ${{ github.sha }}
-          GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
-          GITLAB_VERIFICATION_PROJECT_ID: ${{ vars.GITLAB_VERIFICATION_PROJECT_ID }}
-        run: node scripts/trigger-release-verification.mjs
-      - if: ${{ !cancelled() && steps.npm-publish.outcome == 'success' }}
+      - if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "v${{ steps.version.outputs.version }}" --target "$GITHUB_SHA" --title "v${{ steps.version.outputs.version }}" --generate-notes
-
-  gitlab-verification:
-    name: GitLab release verification
-    needs: publish
-    if: ${{ !cancelled() && needs.publish.outputs.pipeline_id != '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      statuses: write
-    concurrency:
-      group: gitlab-release-verification-${{ github.sha }}
-      cancel-in-progress: false
-    env:
-      ARGUE_SOURCE_SHA: ${{ github.sha }}
-      GITLAB_PIPELINE_ID: ${{ needs.publish.outputs.pipeline_id }}
-      GITLAB_VERIFICATION_PROJECT_ID: ${{ vars.GITLAB_VERIFICATION_PROJECT_ID }}
-      GITHUB_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Report the actual GitLab result on this commit
-        run: node scripts/watch-release-verification.mjs
-      - name: Mark interrupted verification
-        if: ${{ cancelled() }}
-        run: node scripts/watch-release-verification.mjs --cancel

@@ -153,7 +153,3 @@ Agent behaviour lives in [`instructions/`](instructions/README.md). See [the arc
 ## License
 
 MIT
-
-## Published release checks
-
-Published npm releases are independently verified on GitLab across Node 20, 22 and 24. See [release verification](docs/RELEASE-VERIFICATION.md) for the automatic flow, reports and manual retries.
