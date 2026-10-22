@@ -1,6 +1,6 @@
 {
   "name": "argue-ai",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Put several AI models (Claude, GPT, Gemini, …) in a room: they challenge each other with evidence until they agree, and you get one vetted answer. Works from Claude Code, Codex, Cursor, Pi, OpenCode or the terminal.",
   "type": "module",
   "bin": {
