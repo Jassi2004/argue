@@ -1,0 +1,29 @@
+name: verify-release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published npm version (for example 0.3.1)
+        required: true
+        type: string
+      source_sha:
+        description: Full source commit recorded in the npm package gitHead
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Trigger independent published-package checks
+        env:
+          ARGUE_VERSION: ${{ inputs.version }}
+          ARGUE_SOURCE_SHA: ${{ inputs.source_sha }}
+          GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
+          GITLAB_VERIFICATION_PROJECT_ID: ${{ vars.GITLAB_VERIFICATION_PROJECT_ID }}
+        run: node scripts/trigger-release-verification.mjs

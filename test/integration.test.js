@@ -692,6 +692,32 @@ test("a worktree whose creation was killed midway (left locked) is still removed
   assertNoDesks(dir);
 });
 
+test("cleanup removes an incomplete registration without touching another worktree", async () => {
+  const { openWorkspace, addWorktree, removeWorktree } = await import("../src/workspace/git.js");
+  const dir = makeRepo();
+  const scratch = mkdtempSync(join(tmpdir(), "argue-incomplete-wt-"));
+  const ws = await openWorkspace(dir, scratch);
+  const broken = join(scratch, "lab");
+  const other = join(scratch, "other");
+  await addWorktree(ws, broken);
+  await addWorktree(ws, other);
+  const name = readFileSync(join(broken, ".git"), "utf8").trim().split(/[\\/]/).pop();
+  const admin = join(dir, ".git", "worktrees", name);
+  writeFileSync(join(admin, "locked"), "initializing");
+  rmSync(join(admin, "commondir"));
+  rmSync(broken, { recursive: true, force: true });
+  try {
+    await removeWorktree(ws, broken);
+    assert.ok(!existsSync(admin), "incomplete metadata is removed");
+    assert.equal(worktrees(dir), 2, "the unrelated worktree remains registered");
+    assert.ok(existsSync(join(other, "math.js")));
+    assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: other, encoding: "utf8" }).trim(), "");
+  } finally {
+    await removeWorktree(ws, other);
+  }
+  assertNoDesks(dir);
+});
+
 test("removeTree deletes folders with read-only files (like Go's module cache)", { skip: process.platform === "win32" }, async () => {
   const { removeTree } = await import("../src/util/fs.js");
   const d = mkdtempSync(join(tmpdir(), "argue-ro-"));
