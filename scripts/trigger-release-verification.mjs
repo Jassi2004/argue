@@ -27,6 +27,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const url = await triggerVerification();
     console.log(`Published package verification: ${url}`);
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `pipeline_id=${url.split("/").pop()}\npipeline_url=${url}\n`);
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nPublished package verification: [GitLab pipeline](${url})\n`);
   } catch (error) {
     console.error(error.message);
